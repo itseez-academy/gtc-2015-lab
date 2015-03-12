@@ -62,15 +62,13 @@ using namespace cv::detail;
 // Default command line args
 vector<string> img_names;
 bool preview = false;
-bool try_gpu = false;
+bool try_gpu = true;
 double work_megapix = 0.6;
 double seam_megapix = 0.1;
 double compose_megapix = -1;
 float conf_thresh = 1.f;
 bool do_wave_correct = true;
 WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
-bool save_graph = false;
-std::string save_graph_to;
 int expos_comp_type = ExposureCompensator::GAIN_BLOCKS;
 float match_conf = 0.3f;
 int blend_type = Blender::MULTI_BAND;
@@ -82,9 +80,7 @@ int parseCmdArgs(int argc, char** argv);
 
 int main(int argc, char* argv[])
 {
-#if ENABLE_LOG
     int64 app_start_time = getTickCount();
-#endif
 
     cv::setBreakOnError(true);
 
@@ -96,17 +92,15 @@ int main(int argc, char* argv[])
     int num_images = static_cast<int>(img_names.size());
     if (num_images < 2)
     {
-        LOGLN("Need more images");
+        cout << "Need more images\n" << endl;
         return -1;
     }
 
     double work_scale = 1, seam_scale = 1, compose_scale = 1;
     bool is_work_scale_set = false, is_seam_scale_set = false, is_compose_scale_set = false;
 
-    LOGLN("Finding features...");
-#if ENABLE_LOG
+    cout << "Finding features..." << endl;
     int64 t = getTickCount();
-#endif
 
     OrbFeaturesFinder finder;
 
@@ -123,7 +117,7 @@ int main(int argc, char* argv[])
 
         if (full_img.empty())
         {
-            LOGLN("Can't open image " << img_names[i]);
+            cout << "Can't open image " << img_names[i] <<endl;
             return -1;
         }
         if (work_megapix < 0)
@@ -150,7 +144,7 @@ int main(int argc, char* argv[])
 
         finder(img, features[i]);
         features[i].img_idx = i;
-        LOGLN("Features in image #" << i+1 << ": " << features[i].keypoints.size());
+        cout << "Features in image #" << i+1 << ": " << features[i].keypoints.size() << endl;
 
         resize(full_img, img, Size(), seam_scale, seam_scale);
         images[i] = img.clone();
@@ -160,25 +154,15 @@ int main(int argc, char* argv[])
     full_img.release();
     img.release();
 
-    LOGLN("Finding features, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec");
+    cout << "Finding features, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec"<< endl;
 
-    LOG("Pairwise matching");
-#if ENABLE_LOG
+    cout << "Pairwise matching"<< endl;
     t = getTickCount();
-#endif
     vector<MatchesInfo> pairwise_matches;
     BestOf2NearestMatcher matcher(try_gpu, match_conf);
     matcher(features, pairwise_matches);
     matcher.collectGarbage();
-    LOGLN("Pairwise matching, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec");
-
-    // Check if we should save matches graph
-    if (save_graph)
-    {
-        LOGLN("Saving matches graph...");
-        ofstream f(save_graph_to.c_str());
-        f << matchesGraphAsString(img_names, pairwise_matches, conf_thresh);
-    }
+    cout << "Pairwise matching, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec"<< endl;
 
     // Leave only images we are sure are from the same panorama
     vector<int> indices = leaveBiggestComponent(features, pairwise_matches, conf_thresh);
@@ -200,7 +184,7 @@ int main(int argc, char* argv[])
     num_images = static_cast<int>(img_names.size());
     if (num_images < 2)
     {
-        LOGLN("Need more images");
+        cout << "Need more images" << endl;
         return -1;
     }
 
@@ -213,7 +197,6 @@ int main(int argc, char* argv[])
         Mat R;
         cameras[i].R.convertTo(R, CV_32F);
         cameras[i].R = R;
-        LOGLN("Initial intrinsics #" << indices[i]+1 << ":\n" << cameras[i].K());
     }
 
     detail::BundleAdjusterRay adjuster;
@@ -231,10 +214,7 @@ int main(int argc, char* argv[])
 
     vector<double> focals;
     for (size_t i = 0; i < cameras.size(); ++i)
-    {
-        LOGLN("Camera #" << indices[i]+1 << ":\n" << cameras[i].K());
         focals.push_back(cameras[i].focal);
-    }
 
     sort(focals.begin(), focals.end());
     float warped_image_scale;
@@ -253,10 +233,8 @@ int main(int argc, char* argv[])
             cameras[i].R = rmats[i];
     }
 
-    LOGLN("Warping images (auxiliary)... ");
-#if ENABLE_LOG
+    cout << "Warping images (auxiliary)... " << endl;
     t = getTickCount();
-#endif
 
     vector<Point> corners(num_images);
     vector<Mat> masks_warped(num_images);
@@ -305,7 +283,7 @@ int main(int argc, char* argv[])
     for (int i = 0; i < num_images; ++i)
         images_warped[i].convertTo(images_warped_f[i], CV_32F);
 
-    LOGLN("Warping images, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec");
+    cout << "Warping images, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec" << endl;
 
     Ptr<ExposureCompensator> compensator = ExposureCompensator::createDefault(expos_comp_type);
     compensator->feed(corners, images_warped, masks_warped);
@@ -326,10 +304,8 @@ int main(int argc, char* argv[])
     images_warped_f.clear();
     masks.clear();
 
-    LOGLN("Compositing...");
-#if ENABLE_LOG
+    cout << "Compositing..." << endl;
     t = getTickCount();
-#endif
 
     Mat img_warped, img_warped_s;
     Mat dilated_mask, seam_mask, mask, mask_warped;
@@ -339,7 +315,7 @@ int main(int argc, char* argv[])
 
     for (int img_idx = 0; img_idx < num_images; ++img_idx)
     {
-        LOGLN("Compositing image #" << indices[img_idx]+1);
+        cout << "Compositing image #" << indices[img_idx]+1 << endl;
 
         // Read image and resize it if necessary
         full_img = imread(img_names[img_idx]);
@@ -421,7 +397,7 @@ int main(int argc, char* argv[])
             {
                 MultiBandBlender* mb = dynamic_cast<MultiBandBlender*>(static_cast<Blender*>(blender));
                 mb->setNumBands(static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
-                LOGLN("Multi-band blender, number of bands: " << mb->numBands());
+                cout << "Multi-band blender, number of bands: " << mb->numBands() << endl;
             }
             blender->prepare(corners, sizes);
         }
@@ -433,11 +409,12 @@ int main(int argc, char* argv[])
     Mat result, result_mask;
     blender->blend(result, result_mask);
 
-    LOGLN("Compositing, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec");
+    cout << "Compositing, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec" << endl;
 
     imwrite(result_name, result);
 
-    LOGLN("Finished, total time: " << ((getTickCount() - app_start_time) / getTickFrequency()) << " sec");
+    cout << "Finished, total time: " << ((getTickCount() - app_start_time) / getTickFrequency()) << " sec" << endl;
+
     return 0;
 }
 
