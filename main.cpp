@@ -67,17 +67,12 @@ double work_megapix = 0.6;
 double seam_megapix = 0.1;
 double compose_megapix = -1;
 float conf_thresh = 1.f;
-string features_type = "surf";
-string ba_cost_func = "ray";
-string ba_refine_mask = "xxxxx";
 bool do_wave_correct = true;
 WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
 bool save_graph = false;
 std::string save_graph_to;
-string warp_type = "spherical";
 int expos_comp_type = ExposureCompensator::GAIN_BLOCKS;
 float match_conf = 0.3f;
-string seam_find_type = "gc_color";
 int blend_type = Blender::MULTI_BAND;
 float blend_strength = 5;
 string result_name = "result.jpg";
@@ -113,25 +108,7 @@ int main(int argc, char* argv[])
     int64 t = getTickCount();
 #endif
 
-    Ptr<FeaturesFinder> finder;
-    if (features_type == "surf")
-    {
-#if defined(HAVE_OPENCV_NONFREE) && defined(HAVE_OPENCV_GPU)
-        if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
-            finder = new SurfFeaturesFinderGpu();
-        else
-#endif
-            finder = new SurfFeaturesFinder();
-    }
-    else if (features_type == "orb")
-    {
-        finder = new OrbFeaturesFinder();
-    }
-    else
-    {
-        cout << "Unknown 2D features type: '" << features_type << "'.\n";
-        return -1;
-    }
+    OrbFeaturesFinder finder;
 
     Mat full_img, img;
     vector<ImageFeatures> features(num_images);
@@ -171,7 +148,7 @@ int main(int argc, char* argv[])
             is_seam_scale_set = true;
         }
 
-        (*finder)(img, features[i]);
+        finder(img, features[i]);
         features[i].img_idx = i;
         LOGLN("Features in image #" << i+1 << ": " << features[i].keypoints.size());
 
@@ -179,7 +156,7 @@ int main(int argc, char* argv[])
         images[i] = img.clone();
     }
 
-    finder->collectGarbage();
+    finder.collectGarbage();
     full_img.release();
     img.release();
 
@@ -239,23 +216,16 @@ int main(int argc, char* argv[])
         LOGLN("Initial intrinsics #" << indices[i]+1 << ":\n" << cameras[i].K());
     }
 
-    Ptr<detail::BundleAdjusterBase> adjuster;
-    if (ba_cost_func == "reproj") adjuster = new detail::BundleAdjusterReproj();
-    else if (ba_cost_func == "ray") adjuster = new detail::BundleAdjusterRay();
-    else
-    {
-        cout << "Unknown bundle adjustment cost function: '" << ba_cost_func << "'.\n";
-        return -1;
-    }
-    adjuster->setConfThresh(conf_thresh);
+    detail::BundleAdjusterRay adjuster;
+    adjuster.setConfThresh(conf_thresh);
     Mat_<uchar> refine_mask = Mat::zeros(3, 3, CV_8U);
-    if (ba_refine_mask[0] == 'x') refine_mask(0,0) = 1;
-    if (ba_refine_mask[1] == 'x') refine_mask(0,1) = 1;
-    if (ba_refine_mask[2] == 'x') refine_mask(0,2) = 1;
-    if (ba_refine_mask[3] == 'x') refine_mask(1,1) = 1;
-    if (ba_refine_mask[4] == 'x') refine_mask(1,2) = 1;
-    adjuster->setRefinementMask(refine_mask);
-    (*adjuster)(features, pairwise_matches, cameras);
+    refine_mask(0,0) = 1;
+    refine_mask(0,1) = 1;
+    refine_mask(0,2) = 1;
+    refine_mask(1,1) = 1;
+    refine_mask(1,2) = 1;
+    adjuster.setRefinementMask(refine_mask);
+    adjuster(features, pairwise_matches, cameras);
 
     // Find median focal length
 
@@ -307,34 +277,12 @@ int main(int argc, char* argv[])
 #if defined(HAVE_OPENCV_GPU)
     if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
     {
-        if (warp_type == "plane") warper_creator = new cv::PlaneWarperGpu();
-        else if (warp_type == "cylindrical") warper_creator = new cv::CylindricalWarperGpu();
-        else if (warp_type == "spherical") warper_creator = new cv::SphericalWarperGpu();
+        warper_creator = new cv::SphericalWarperGpu();
     }
     else
 #endif
     {
-        if (warp_type == "plane") warper_creator = new cv::PlaneWarper();
-        else if (warp_type == "cylindrical") warper_creator = new cv::CylindricalWarper();
-        else if (warp_type == "spherical") warper_creator = new cv::SphericalWarper();
-        else if (warp_type == "fisheye") warper_creator = new cv::FisheyeWarper();
-        else if (warp_type == "stereographic") warper_creator = new cv::StereographicWarper();
-        else if (warp_type == "compressedPlaneA2B1") warper_creator = new cv::CompressedRectilinearWarper(2, 1);
-        else if (warp_type == "compressedPlaneA1.5B1") warper_creator = new cv::CompressedRectilinearWarper(1.5, 1);
-        else if (warp_type == "compressedPlanePortraitA2B1") warper_creator = new cv::CompressedRectilinearPortraitWarper(2, 1);
-        else if (warp_type == "compressedPlanePortraitA1.5B1") warper_creator = new cv::CompressedRectilinearPortraitWarper(1.5, 1);
-        else if (warp_type == "paniniA2B1") warper_creator = new cv::PaniniWarper(2, 1);
-        else if (warp_type == "paniniA1.5B1") warper_creator = new cv::PaniniWarper(1.5, 1);
-        else if (warp_type == "paniniPortraitA2B1") warper_creator = new cv::PaniniPortraitWarper(2, 1);
-        else if (warp_type == "paniniPortraitA1.5B1") warper_creator = new cv::PaniniPortraitWarper(1.5, 1);
-        else if (warp_type == "mercator") warper_creator = new cv::MercatorWarper();
-        else if (warp_type == "transverseMercator") warper_creator = new cv::TransverseMercatorWarper();
-    }
-
-    if (warper_creator.empty())
-    {
-        cout << "Can't create the following warper '" << warp_type << "'\n";
-        return 1;
+        warper_creator = new cv::SphericalWarper();
     }
 
     Ptr<RotationWarper> warper = warper_creator->create(static_cast<float>(warped_image_scale * seam_work_aspect));
@@ -363,37 +311,12 @@ int main(int argc, char* argv[])
     compensator->feed(corners, images_warped, masks_warped);
 
     Ptr<SeamFinder> seam_finder;
-    if (seam_find_type == "no")
-        seam_finder = new detail::NoSeamFinder();
-    else if (seam_find_type == "voronoi")
-        seam_finder = new detail::VoronoiSeamFinder();
-    else if (seam_find_type == "gc_color")
-    {
 #if defined(HAVE_OPENCV_GPU)
-        if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
-            seam_finder = new detail::GraphCutSeamFinderGpu(GraphCutSeamFinderBase::COST_COLOR);
-        else
+    if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
+        seam_finder = new detail::GraphCutSeamFinderGpu(GraphCutSeamFinderBase::COST_COLOR);
+    else
 #endif
-            seam_finder = new detail::GraphCutSeamFinder(GraphCutSeamFinderBase::COST_COLOR);
-    }
-    else if (seam_find_type == "gc_colorgrad")
-    {
-#if defined(HAVE_OPENCV_GPU)
-        if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
-            seam_finder = new detail::GraphCutSeamFinderGpu(GraphCutSeamFinderBase::COST_COLOR_GRAD);
-        else
-#endif
-            seam_finder = new detail::GraphCutSeamFinder(GraphCutSeamFinderBase::COST_COLOR_GRAD);
-    }
-    else if (seam_find_type == "dp_color")
-        seam_finder = new detail::DpSeamFinder(DpSeamFinder::COLOR);
-    else if (seam_find_type == "dp_colorgrad")
-        seam_finder = new detail::DpSeamFinder(DpSeamFinder::COLOR_GRAD);
-    if (seam_finder.empty())
-    {
-        cout << "Can't create the following seam finder '" << seam_find_type << "'\n";
-        return 1;
-    }
+        seam_finder = new detail::GraphCutSeamFinder(GraphCutSeamFinderBase::COST_COLOR);
 
     seam_finder->find(images_warped_f, corners, masks_warped);
 
@@ -494,17 +417,11 @@ int main(int argc, char* argv[])
             float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
             if (blend_width < 1.f)
                 blender = Blender::createDefault(Blender::NO, try_gpu);
-            else if (blend_type == Blender::MULTI_BAND)
+            else
             {
                 MultiBandBlender* mb = dynamic_cast<MultiBandBlender*>(static_cast<Blender*>(blender));
                 mb->setNumBands(static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
                 LOGLN("Multi-band blender, number of bands: " << mb->numBands());
-            }
-            else if (blend_type == Blender::FEATHER)
-            {
-                FeatherBlender* fb = dynamic_cast<FeatherBlender*>(static_cast<Blender*>(blender));
-                fb->setSharpness(1.f/blend_width);
-                LOGLN("Feather blender, sharpness: " << fb->sharpness());
             }
             blender->prepare(corners, sizes);
         }
