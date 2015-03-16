@@ -126,21 +126,14 @@ int main(int argc, char* argv[])
             cout << "Can't open image " << img_names[i] <<endl;
             return -1;
         }
-        if (work_megapix < 0)
+
+        if (!is_work_scale_set)
         {
-            img = full_img;
-            work_scale = 1;
+            work_scale = min(1.0, sqrt(work_megapix * 1e6 / full_img.size().area()));
             is_work_scale_set = true;
         }
-        else
-        {
-            if (!is_work_scale_set)
-            {
-                work_scale = min(1.0, sqrt(work_megapix * 1e6 / full_img.size().area()));
-                is_work_scale_set = true;
-            }
-            resize(full_img, img, Size(), work_scale, work_scale);
-        }
+        resize(full_img, img, Size(), work_scale, work_scale);
+
         if (!is_seam_scale_set)
         {
             seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_img.size().area()));
