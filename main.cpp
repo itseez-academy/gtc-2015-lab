@@ -100,6 +100,22 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+    vector<Mat> full_imgs(num_images);
+    vector<Size> full_img_sizes(num_images);
+    for (size_t i = 0; i < num_images; ++i)
+    {
+        full_imgs[i] = imread(img_names[i]);
+        full_img_sizes[i] = full_imgs[i].size();
+
+        if (full_imgs[i].empty())
+        {
+            cout << "Can't open image " << img_names[i] <<endl;
+            return -1;
+        }
+    }
+
+    cout << "Files reading finished" << endl;
+
     double work_scale = 1, seam_scale = 1, compose_scale = 1;
     bool is_work_scale_set = false, is_seam_scale_set = false, is_compose_scale_set = false;
 
@@ -110,33 +126,23 @@ int main(int argc, char* argv[])
 
     OrbFeaturesFinder finder;
 
-    Mat full_img, img;
+    Mat img;
     vector<ImageFeatures> features(num_images);
     vector<Mat> images(num_images);
-    vector<Size> full_img_sizes(num_images);
     double seam_work_aspect = 1;
 
     for (int i = 0; i < num_images; ++i)
     {
-        full_img = imread(img_names[i]);
-        full_img_sizes[i] = full_img.size();
-
-        if (full_img.empty())
-        {
-            cout << "Can't open image " << img_names[i] <<endl;
-            return -1;
-        }
-
         if (!is_work_scale_set)
         {
-            work_scale = min(1.0, sqrt(work_megapix * 1e6 / full_img.size().area()));
+            work_scale = min(1.0, sqrt(work_megapix * 1e6 / full_img_sizes[i].area()));
             is_work_scale_set = true;
         }
-        resize(full_img, img, Size(), work_scale, work_scale);
+        resize(full_imgs[i], img, Size(), work_scale, work_scale);
 
         if (!is_seam_scale_set)
         {
-            seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_img.size().area()));
+            seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_img_sizes[i].area()));
             seam_work_aspect = seam_scale / work_scale;
             is_seam_scale_set = true;
         }
@@ -145,12 +151,11 @@ int main(int argc, char* argv[])
         features[i].img_idx = i;
         cout << "Features in image #" << i+1 << ": " << features[i].keypoints.size() << endl;
 
-        resize(full_img, img, Size(), seam_scale, seam_scale);
+        resize(full_imgs[i], img, Size(), seam_scale, seam_scale);
         images[i] = img.clone();
     }
 
     finder.collectGarbage();
-    full_img.release();
     img.release();
 
     find_features_time = (getTickCount() - t) / getTickFrequency();
@@ -320,11 +325,10 @@ int main(int argc, char* argv[])
         cout << "Compositing image #" << indices[img_idx]+1 << endl;
 
         // Read image and resize it if necessary
-        full_img = imread(img_names[img_idx]);
         if (!is_compose_scale_set)
         {
             if (compose_megapix > 0)
-                compose_scale = min(1.0, sqrt(compose_megapix * 1e6 / full_img.size().area()));
+                compose_scale = min(1.0, sqrt(compose_megapix * 1e6 / full_img_sizes[img_idx].area()));
             is_compose_scale_set = true;
 
             // Compute relative scales
@@ -358,10 +362,9 @@ int main(int argc, char* argv[])
             }
         }
         if (abs(compose_scale - 1) > 1e-1)
-            resize(full_img, img, Size(), compose_scale, compose_scale);
+            resize(full_imgs[img_idx], img, Size(), compose_scale, compose_scale);
         else
-            img = full_img;
-        full_img.release();
+            img = full_imgs[img_idx];
         Size img_size = img.size();
 
         Mat K;
