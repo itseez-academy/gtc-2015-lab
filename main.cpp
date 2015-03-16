@@ -116,8 +116,8 @@ int main(int argc, char* argv[])
 
     cout << "Files reading finished" << endl;
 
-    double work_scale = 1, seam_scale = 1, compose_scale = 1;
-    bool is_work_scale_set = false, is_seam_scale_set = false, is_compose_scale_set = false;
+    double compose_scale = 1;
+    bool is_compose_scale_set = false;
 
     int64 app_start_time = getTickCount();
 
@@ -129,23 +129,14 @@ int main(int argc, char* argv[])
     Mat img;
     vector<ImageFeatures> features(num_images);
     vector<Mat> images(num_images);
-    double seam_work_aspect = 1;
+
+    double work_scale = min(1.0, sqrt(work_megapix * 1e6 / full_img_sizes[0].area()));
+    double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_img_sizes[0].area()));
+    double seam_work_aspect = seam_scale / work_scale;
 
     for (int i = 0; i < num_images; ++i)
     {
-        if (!is_work_scale_set)
-        {
-            work_scale = min(1.0, sqrt(work_megapix * 1e6 / full_img_sizes[i].area()));
-            is_work_scale_set = true;
-        }
         resize(full_imgs[i], img, Size(), work_scale, work_scale);
-
-        if (!is_seam_scale_set)
-        {
-            seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_img_sizes[i].area()));
-            seam_work_aspect = seam_scale / work_scale;
-            is_seam_scale_set = true;
-        }
 
         finder(img, features[i]);
         features[i].img_idx = i;
@@ -362,9 +353,9 @@ int main(int argc, char* argv[])
             }
         }
         if (abs(compose_scale - 1) > 1e-1)
-            resize(full_imgs[img_idx], img, Size(), compose_scale, compose_scale);
+            resize(full_imgs[indices[img_idx]], img, Size(), compose_scale, compose_scale);
         else
-            img = full_imgs[img_idx];
+            img = full_imgs[indices[img_idx]];
         Size img_size = img.size();
 
         Mat K;
