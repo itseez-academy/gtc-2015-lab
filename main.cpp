@@ -80,7 +80,11 @@ int parseCmdArgs(int argc, char** argv);
 
 int main(int argc, char* argv[])
 {
-    int64 app_start_time = getTickCount();
+    float find_features_time = 0;
+    float partwise_matching_time = 0;
+    float warping_time = 0;
+    float compositing_time = 0;
+    float total_time = 0;
 
     cv::setBreakOnError(true);
 
@@ -89,15 +93,17 @@ int main(int argc, char* argv[])
         return retval;
 
     // Check if have enough images
-    int num_images = static_cast<int>(img_names.size());
+    size_t num_images = img_names.size();
     if (num_images < 2)
     {
-        cout << "Need more images\n" << endl;
+        cout << "Need more images" << endl;
         return -1;
     }
 
     double work_scale = 1, seam_scale = 1, compose_scale = 1;
     bool is_work_scale_set = false, is_seam_scale_set = false, is_compose_scale_set = false;
+
+    int64 app_start_time = getTickCount();
 
     cout << "Finding features..." << endl;
     int64 t = getTickCount();
@@ -154,15 +160,16 @@ int main(int argc, char* argv[])
     full_img.release();
     img.release();
 
-    cout << "Finding features, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec"<< endl;
+    find_features_time = (getTickCount() - t) / getTickFrequency();
 
-    cout << "Pairwise matching"<< endl;
+    cout << "Pairwise matching..."<< endl;
     t = getTickCount();
     vector<MatchesInfo> pairwise_matches;
     BestOf2NearestMatcher matcher(try_gpu, match_conf);
     matcher(features, pairwise_matches);
     matcher.collectGarbage();
-    cout << "Pairwise matching, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec"<< endl;
+
+    partwise_matching_time = (getTickCount() - t) / getTickFrequency();
 
     // Leave only images we are sure are from the same panorama
     vector<int> indices = leaveBiggestComponent(features, pairwise_matches, conf_thresh);
@@ -181,7 +188,7 @@ int main(int argc, char* argv[])
     full_img_sizes = full_img_sizes_subset;
 
     // Check if we still have enough images
-    num_images = static_cast<int>(img_names.size());
+    num_images = img_names.size();
     if (num_images < 2)
     {
         cout << "Need more images" << endl;
@@ -221,7 +228,8 @@ int main(int argc, char* argv[])
     if (focals.size() % 2 == 1)
         warped_image_scale = static_cast<float>(focals[focals.size() / 2]);
     else
-        warped_image_scale = static_cast<float>(focals[focals.size() / 2 - 1] + focals[focals.size() / 2]) * 0.5f;
+        warped_image_scale = static_cast<float>(focals[focals.size() / 2 - 1] +
+                             focals[focals.size() / 2]) * 0.5f;
 
     if (do_wave_correct)
     {
@@ -233,7 +241,7 @@ int main(int argc, char* argv[])
             cameras[i].R = rmats[i];
     }
 
-    cout << "Warping images (auxiliary)... " << endl;
+    cout << "Warping images (auxiliary)..." << endl;
     t = getTickCount();
 
     vector<Point> corners(num_images);
@@ -263,7 +271,8 @@ int main(int argc, char* argv[])
         warper_creator = new cv::SphericalWarper();
     }
 
-    Ptr<RotationWarper> warper = warper_creator->create(static_cast<float>(warped_image_scale * seam_work_aspect));
+    Ptr<RotationWarper> warper = warper_creator->create(
+                static_cast<float>(warped_image_scale * seam_work_aspect));
 
     for (int i = 0; i < num_images; ++i)
     {
@@ -273,7 +282,8 @@ int main(int argc, char* argv[])
         K(0,0) *= swa; K(0,2) *= swa;
         K(1,1) *= swa; K(1,2) *= swa;
 
-        corners[i] = warper->warp(images[i], K, cameras[i].R, INTER_LINEAR, BORDER_REFLECT, images_warped[i]);
+        corners[i] = warper->warp(images[i], K, cameras[i].R, INTER_LINEAR,
+                                  BORDER_REFLECT, images_warped[i]);
         sizes[i] = images_warped[i].size();
 
         warper->warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
@@ -283,7 +293,7 @@ int main(int argc, char* argv[])
     for (int i = 0; i < num_images; ++i)
         images_warped[i].convertTo(images_warped_f[i], CV_32F);
 
-    cout << "Warping images, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec" << endl;
+    warping_time = (getTickCount() - t) / getTickFrequency();
 
     Ptr<ExposureCompensator> compensator = ExposureCompensator::createDefault(expos_comp_type);
     compensator->feed(corners, images_warped, masks_warped);
@@ -310,10 +320,9 @@ int main(int argc, char* argv[])
     Mat img_warped, img_warped_s;
     Mat dilated_mask, seam_mask, mask, mask_warped;
     Ptr<Blender> blender;
-    //double compose_seam_aspect = 1;
     double compose_work_aspect = 1;
 
-    for (int img_idx = 0; img_idx < num_images; ++img_idx)
+    for (size_t img_idx = 0; img_idx < num_images; ++img_idx)
     {
         cout << "Compositing image #" << indices[img_idx]+1 << endl;
 
@@ -326,7 +335,6 @@ int main(int argc, char* argv[])
             is_compose_scale_set = true;
 
             // Compute relative scales
-            //compose_seam_aspect = compose_scale / seam_scale;
             compose_work_aspect = compose_scale / work_scale;
 
             // Update warped image scale
@@ -334,7 +342,7 @@ int main(int argc, char* argv[])
             warper = warper_creator->create(warped_image_scale);
 
             // Update corners and sizes
-            for (int i = 0; i < num_images; ++i)
+            for (size_t i = 0; i < num_images; ++i)
             {
                 // Update intrinsics
                 cameras[i].focal *= compose_work_aspect;
@@ -397,7 +405,6 @@ int main(int argc, char* argv[])
             {
                 MultiBandBlender* mb = dynamic_cast<MultiBandBlender*>(static_cast<Blender*>(blender));
                 mb->setNumBands(static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
-                cout << "Multi-band blender, number of bands: " << mb->numBands() << endl;
             }
             blender->prepare(corners, sizes);
         }
@@ -409,11 +416,17 @@ int main(int argc, char* argv[])
     Mat result, result_mask;
     blender->blend(result, result_mask);
 
-    cout << "Compositing, time: " << ((getTickCount() - t) / getTickFrequency()) << " sec" << endl;
+    compositing_time = (getTickCount() - t) / getTickFrequency();
+
+    total_time = (getTickCount() - app_start_time) / getTickFrequency();
 
     imwrite(result_name, result);
 
-    cout << "Finished, total time: " << ((getTickCount() - app_start_time) / getTickFrequency()) << " sec" << endl;
+    cout << "Finding features, time: " << find_features_time << " sec" << endl;
+    cout << "Pairwise matching, time: " << partwise_matching_time << " sec"<< endl;
+    cout << "Warping images, time: " << warping_time << " sec" << endl;
+    cout << "Compositing, time: " << compositing_time << " sec" << endl;
+    cout << "Finished, total time: " << total_time << " sec" << endl;
 
     return 0;
 }
