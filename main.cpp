@@ -164,16 +164,19 @@ int main(int argc, char* argv[])
     vector<int> indices = leaveBiggestComponent(features, pairwise_matches, conf_thresh);
     vector<Mat> img_subset;
     vector<string> img_names_subset;
+    vector<Mat> full_imgs_subset;
     vector<Size> full_img_sizes_subset;
     for (size_t i = 0; i < indices.size(); ++i)
     {
         img_names_subset.push_back(img_names[indices[i]]);
         img_subset.push_back(images[indices[i]]);
+        full_imgs_subset.push_back(full_imgs[indices[i]]);
         full_img_sizes_subset.push_back(full_img_sizes[indices[i]]);
     }
 
     images = img_subset;
     img_names = img_names_subset;
+    full_imgs = full_imgs_subset;
     full_img_sizes = full_img_sizes_subset;
 
     // Check if we still have enough images
@@ -353,9 +356,9 @@ int main(int argc, char* argv[])
             }
         }
         if (abs(compose_scale - 1) > 1e-1)
-            resize(full_imgs[indices[img_idx]], img, Size(), compose_scale, compose_scale);
+            resize(full_imgs[img_idx], img, Size(), compose_scale, compose_scale);
         else
-            img = full_imgs[indices[img_idx]];
+            img = full_imgs[img_idx];
         Size img_size = img.size();
 
         Mat K;
