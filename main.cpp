@@ -61,13 +61,11 @@ using namespace cv::detail;
 
 // Default command line args
 vector<string> img_names;
-bool preview = false;
 bool try_gpu = true;
 double work_megapix = 0.6;
 double seam_megapix = 0.1;
 double compose_megapix = -1;
 float conf_thresh = 1.f;
-bool do_wave_correct = true;
 WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
 int expos_comp_type = ExposureCompensator::GAIN_BLOCKS;
 float match_conf = 0.3f;
@@ -161,6 +159,7 @@ int main(int argc, char* argv[])
     partwise_matching_time = (getTickCount() - t) / getTickFrequency();
 
     // Leave only images we are sure are from the same panorama
+    cout << "Finding biggest connected component..." << endl;
     vector<int> indices = leaveBiggestComponent(features, pairwise_matches, conf_thresh);
     vector<Mat> img_subset;
     vector<string> img_names_subset;
@@ -187,6 +186,7 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+    cout << "Image registration..." << endl;
     HomographyBasedEstimator estimator;
     vector<CameraParams> cameras;
     estimator(features, pairwise_matches, cameras);
@@ -200,12 +200,8 @@ int main(int argc, char* argv[])
 
     detail::BundleAdjusterRay adjuster;
     adjuster.setConfThresh(conf_thresh);
-    Mat_<uchar> refine_mask = Mat::zeros(3, 3, CV_8U);
-    refine_mask(0,0) = 1;
-    refine_mask(0,1) = 1;
-    refine_mask(0,2) = 1;
-    refine_mask(1,1) = 1;
-    refine_mask(1,2) = 1;
+    uchar refine_mask_data[] = {1, 1, 1, 0, 1, 1, 0, 0, 0};
+    Mat refine_mask(3, 3, CV_8U, refine_mask_data);
     adjuster.setRefinementMask(refine_mask);
     adjuster(features, pairwise_matches, cameras);
 
@@ -223,15 +219,12 @@ int main(int argc, char* argv[])
         warped_image_scale = static_cast<float>(focals[focals.size() / 2 - 1] +
                              focals[focals.size() / 2]) * 0.5f;
 
-    if (do_wave_correct)
-    {
-        vector<Mat> rmats;
-        for (size_t i = 0; i < cameras.size(); ++i)
-            rmats.push_back(cameras[i].R);
-        waveCorrect(rmats, wave_correct);
-        for (size_t i = 0; i < cameras.size(); ++i)
-            cameras[i].R = rmats[i];
-    }
+    vector<Mat> rmats;
+    for (size_t i = 0; i < cameras.size(); ++i)
+        rmats.push_back(cameras[i].R);
+    waveCorrect(rmats, wave_correct);
+    for (size_t i = 0; i < cameras.size(); ++i)
+        cameras[i].R = rmats[i];
 
     cout << "Warping images (auxiliary)..." << endl;
     t = getTickCount();
@@ -243,7 +236,7 @@ int main(int argc, char* argv[])
     vector<Mat> masks(num_images);
 
     // Preapre images masks
-    for (int i = 0; i < num_images; ++i)
+    for (size_t i = 0; i < num_images; ++i)
     {
         masks[i].create(images[i].size(), CV_8U);
         masks[i].setTo(Scalar::all(255));
@@ -266,7 +259,7 @@ int main(int argc, char* argv[])
     Ptr<RotationWarper> warper = warper_creator->create(
                 static_cast<float>(warped_image_scale * seam_work_aspect));
 
-    for (int i = 0; i < num_images; ++i)
+    for (size_t i = 0; i < num_images; ++i)
     {
         Mat_<float> K;
         cameras[i].K().convertTo(K, CV_32F);
@@ -282,11 +275,12 @@ int main(int argc, char* argv[])
     }
 
     vector<Mat> images_warped_f(num_images);
-    for (int i = 0; i < num_images; ++i)
+    for (size_t i = 0; i < num_images; ++i)
         images_warped[i].convertTo(images_warped_f[i], CV_32F);
 
     warping_time = (getTickCount() - t) / getTickFrequency();
 
+    cout << "Exposure compensation..." << endl;
     Ptr<ExposureCompensator> compensator = ExposureCompensator::createDefault(expos_comp_type);
     compensator->feed(corners, images_warped, masks_warped);
 
