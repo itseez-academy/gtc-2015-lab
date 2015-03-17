@@ -210,10 +210,6 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, dou
 
     warping_time = (getTickCount() - t) / getTickFrequency();
 
-    cout << "Exposure compensation..." << endl;
-    Ptr<ExposureCompensator> compensator = ExposureCompensator::createDefault(expos_comp_type);
-    compensator->feed(corners, images_warped, masks_warped);
-
     Ptr<SeamFinder> seam_finder;
 #if defined(HAVE_OPENCV_GPU)
     if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
@@ -274,9 +270,6 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, dou
         mask.create(full_imgs[img_idx].size(), CV_8U);
         mask.setTo(Scalar::all(255));
         warper->warp(mask, K, cameras[img_idx].R, INTER_NEAREST, BORDER_CONSTANT, mask_warped);
-
-        // Compensate exposure
-        compensator->apply(img_idx, corners[img_idx], img_warped, mask_warped);
 
         img_warped.convertTo(img_warped_s, CV_16S);
         img_warped.release();
