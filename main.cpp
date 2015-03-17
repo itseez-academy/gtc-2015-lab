@@ -100,6 +100,58 @@ void findFeatures(const vector<Mat>& full_imgs, vector<ImageFeatures>& features,
     finder.collectGarbage();
 }
 
+float registerImages(const vector<ImageFeatures>& features, vector<CameraParams>& cameras)
+{
+    cout << "Pairwise matching..." << endl;
+    double t = getTickCount();
+    vector<MatchesInfo> pairwise_matches;
+    BestOf2NearestMatcher matcher(try_gpu, match_conf);
+    matcher(features, pairwise_matches);
+    matcher.collectGarbage();
+    partwise_matching_time = (getTickCount() - t) / getTickFrequency();
+
+    cout << "Image registration..." << endl;
+    HomographyBasedEstimator estimator;
+    estimator(features, pairwise_matches, cameras);
+
+    for (size_t i = 0; i < cameras.size(); ++i)
+    {
+        Mat R;
+        cameras[i].R.convertTo(R, CV_32F);
+        cameras[i].R = R;
+    }
+
+    detail::BundleAdjusterRay adjuster;
+    adjuster.setConfThresh(conf_thresh);
+    uchar refine_mask_data[] = {1, 1, 1, 0, 1, 1, 0, 0, 0};
+    Mat refine_mask(3, 3, CV_8U, refine_mask_data);
+    adjuster.setRefinementMask(refine_mask);
+    adjuster(features, pairwise_matches, cameras);
+
+    // Find median focal length
+
+    vector<double> focals;
+    for (size_t i = 0; i < cameras.size(); ++i)
+        focals.push_back(cameras[i].focal);
+
+    sort(focals.begin(), focals.end());
+    float warped_image_scale;
+    if (focals.size() % 2 == 1)
+        warped_image_scale = static_cast<float>(focals[focals.size() / 2]);
+    else
+        warped_image_scale = static_cast<float>(focals[focals.size() / 2 - 1] +
+                             focals[focals.size() / 2]) * 0.5f;
+
+    vector<Mat> rmats;
+    for (size_t i = 0; i < cameras.size(); ++i)
+        rmats.push_back(cameras[i].R);
+    waveCorrect(rmats, wave_correct);
+    for (size_t i = 0; i < cameras.size(); ++i)
+        cameras[i].R = rmats[i];
+
+    return warped_image_scale;
+}
+
 Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, double work_scale, float warped_image_scale)
 {
     double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_imgs[0].size().area()));
@@ -282,53 +334,8 @@ int main(int argc, char* argv[])
     findFeatures(full_imgs, features, work_scale);
     find_features_time = (getTickCount() - t) / getTickFrequency();
 
-    cout << "Pairwise matching..." << endl;
-    t = getTickCount();
-    vector<MatchesInfo> pairwise_matches;
-    BestOf2NearestMatcher matcher(try_gpu, match_conf);
-    matcher(features, pairwise_matches);
-    matcher.collectGarbage();
-    partwise_matching_time = (getTickCount() - t) / getTickFrequency();
-
-    cout << "Image registration..." << endl;
-    HomographyBasedEstimator estimator;
     vector<CameraParams> cameras;
-    estimator(features, pairwise_matches, cameras);
-
-    for (size_t i = 0; i < cameras.size(); ++i)
-    {
-        Mat R;
-        cameras[i].R.convertTo(R, CV_32F);
-        cameras[i].R = R;
-    }
-
-    detail::BundleAdjusterRay adjuster;
-    adjuster.setConfThresh(conf_thresh);
-    uchar refine_mask_data[] = {1, 1, 1, 0, 1, 1, 0, 0, 0};
-    Mat refine_mask(3, 3, CV_8U, refine_mask_data);
-    adjuster.setRefinementMask(refine_mask);
-    adjuster(features, pairwise_matches, cameras);
-
-    // Find median focal length
-
-    vector<double> focals;
-    for (size_t i = 0; i < cameras.size(); ++i)
-        focals.push_back(cameras[i].focal);
-
-    sort(focals.begin(), focals.end());
-    float warped_image_scale;
-    if (focals.size() % 2 == 1)
-        warped_image_scale = static_cast<float>(focals[focals.size() / 2]);
-    else
-        warped_image_scale = static_cast<float>(focals[focals.size() / 2 - 1] +
-                             focals[focals.size() / 2]) * 0.5f;
-
-    vector<Mat> rmats;
-    for (size_t i = 0; i < cameras.size(); ++i)
-        rmats.push_back(cameras[i].R);
-    waveCorrect(rmats, wave_correct);
-    for (size_t i = 0; i < cameras.size(); ++i)
-        cameras[i].R = rmats[i];
+    float warped_image_scale = registerImages(features, cameras);
 
     t = getTickCount();
     Mat result = composePano(full_imgs, cameras, work_scale, warped_image_scale);
