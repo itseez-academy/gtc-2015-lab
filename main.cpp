@@ -290,28 +290,6 @@ int main(int argc, char* argv[])
     matcher.collectGarbage();
     partwise_matching_time = (getTickCount() - t) / getTickFrequency();
 
-    // Leave only images we are sure are from the same panorama
-    cout << "Finding biggest connected component..." << endl;
-    vector<int> indices = leaveBiggestComponent(features, pairwise_matches, conf_thresh);
-    vector<string> img_names_subset;
-    vector<Mat> full_imgs_subset;
-    for (size_t i = 0; i < indices.size(); ++i)
-    {
-        img_names_subset.push_back(img_names[indices[i]]);
-        full_imgs_subset.push_back(full_imgs[indices[i]]);
-    }
-
-    img_names = img_names_subset;
-    full_imgs = full_imgs_subset;
-
-    // Check if we still have enough images
-    num_images = img_names.size();
-    if (num_images < 2)
-    {
-        cout << "Need more images" << endl;
-        return -1;
-    }
-
     cout << "Image registration..." << endl;
     HomographyBasedEstimator estimator;
     vector<CameraParams> cameras;
