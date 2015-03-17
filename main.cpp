@@ -127,29 +127,6 @@ float registerImages(const vector<ImageFeatures>& features, vector<CameraParams>
     Mat refine_mask(3, 3, CV_8U, refine_mask_data);
     adjuster.setRefinementMask(refine_mask);
     adjuster(features, pairwise_matches, cameras);
-
-    // Find median focal length
-
-    vector<double> focals;
-    for (size_t i = 0; i < cameras.size(); ++i)
-        focals.push_back(cameras[i].focal);
-
-    sort(focals.begin(), focals.end());
-    float warped_image_scale;
-    if (focals.size() % 2 == 1)
-        warped_image_scale = static_cast<float>(focals[focals.size() / 2]);
-    else
-        warped_image_scale = static_cast<float>(focals[focals.size() / 2 - 1] +
-                             focals[focals.size() / 2]) * 0.5f;
-
-    vector<Mat> rmats;
-    for (size_t i = 0; i < cameras.size(); ++i)
-        rmats.push_back(cameras[i].R);
-    waveCorrect(rmats, wave_correct);
-    for (size_t i = 0; i < cameras.size(); ++i)
-        cameras[i].R = rmats[i];
-
-    return warped_image_scale;
 }
 
 Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, double work_scale, float warped_image_scale)
@@ -328,7 +305,20 @@ int main(int argc, char* argv[])
     find_features_time = (getTickCount() - t) / getTickFrequency();
 
     vector<CameraParams> cameras;
-    float warped_image_scale = registerImages(features, cameras);
+    registerImages(features, cameras);
+
+    // Find median focal length
+    vector<double> focals;
+    for (size_t i = 0; i < cameras.size(); ++i)
+        focals.push_back(cameras[i].focal);
+
+    sort(focals.begin(), focals.end());
+    float warped_image_scale;
+    if (focals.size() % 2 == 1)
+        warped_image_scale = static_cast<float>(focals[focals.size() / 2]);
+    else
+        warped_image_scale = static_cast<float>(focals[focals.size() / 2 - 1] +
+                             focals[focals.size() / 2]) * 0.5f;
 
     t = getTickCount();
     Mat result = composePano(full_imgs, cameras, work_scale, warped_image_scale);
