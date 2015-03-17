@@ -81,7 +81,7 @@ float total_time = 0;
 void printUsage();
 int parseCmdArgs(int argc, char** argv);
 
-void findFeatures(const vector<Mat>& full_imgs, vector<ImageFeatures>& features, double work_scale)
+void findFeatures(const vector<Mat>& full_imgs, vector<ImageFeatures>& features)
 {
     Mat img;
     OrbFeaturesFinder finder;
@@ -90,9 +90,7 @@ void findFeatures(const vector<Mat>& full_imgs, vector<ImageFeatures>& features,
 
     for (size_t i = 0; i < full_imgs.size(); ++i)
     {
-        resize(full_imgs[i], img, Size(), work_scale, work_scale);
-
-        finder(img, features[i]);
+        finder(full_imgs[i], features[i]);
         features[i].img_idx = i;
         cout << "Features in image #" << i+1 << ": " << features[i].keypoints.size() << endl;
     }
@@ -100,7 +98,7 @@ void findFeatures(const vector<Mat>& full_imgs, vector<ImageFeatures>& features,
     finder.collectGarbage();
 }
 
-float registerImages(const vector<ImageFeatures>& features, vector<CameraParams>& cameras)
+void registerImages(const vector<ImageFeatures>& features, vector<CameraParams>& cameras)
 {
     cout << "Pairwise matching..." << endl;
     double t = getTickCount();
@@ -129,11 +127,9 @@ float registerImages(const vector<ImageFeatures>& features, vector<CameraParams>
     adjuster(features, pairwise_matches, cameras);
 }
 
-Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, double work_scale, float warped_image_scale)
+Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, float warped_image_scale)
 {
     double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_imgs[0].size().area()));
-    double seam_work_aspect = seam_scale / work_scale;
-    double compose_work_aspect = 1. / work_scale;
 
     vector<Mat> images(full_imgs.size());
     vector<Mat> masks(full_imgs.size());
@@ -166,13 +162,13 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, dou
         warper_creator = new cv::SphericalWarper();
 
     Ptr<RotationWarper> warper = warper_creator->create(
-                static_cast<float>(warped_image_scale * seam_work_aspect));
+                static_cast<float>(warped_image_scale * seam_scale));
 
     for (size_t i = 0; i < full_imgs.size(); ++i)
     {
         Mat_<float> K;
         cameras[i].K().convertTo(K, CV_32F);
-        float swa = (float)seam_work_aspect;
+        float swa = (float)seam_scale;
         K(0,0) *= swa; K(0,2) *= swa; K(1,1) *= swa; K(1,2) *= swa;
 
         corners[i] = warper->warp(images[i], K, cameras[i].R, INTER_LINEAR,
@@ -207,17 +203,11 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, dou
     t = getTickCount();
 
     // Update warped image scale
-    warped_image_scale *= static_cast<float>(compose_work_aspect);
     warper = warper_creator->create(warped_image_scale);
 
     // Update corners and sizes
     for (size_t i = 0; i < cameras.size(); ++i)
     {
-        // Update intrinsics
-        cameras[i].focal *= compose_work_aspect;
-        cameras[i].ppx *= compose_work_aspect;
-        cameras[i].ppy *= compose_work_aspect;
-
         Mat K;
         cameras[i].K().convertTo(K, CV_32F);
         Rect roi = warper->warpRoi(full_imgs[i].size(), K, cameras[i].R);
@@ -296,12 +286,11 @@ int main(int argc, char* argv[])
     cout << "Images reading finished" << endl;
 
     int64 app_start_time = getTickCount();
-    double work_scale = min(1.0, sqrt(work_megapix * 1e6 / full_imgs[0].size().area()));
 
     cout << "Finding features..." << endl;
     vector<ImageFeatures> features;
     int64 t = getTickCount();
-    findFeatures(full_imgs, features, work_scale);
+    findFeatures(full_imgs, features);
     find_features_time = (getTickCount() - t) / getTickFrequency();
 
     vector<CameraParams> cameras;
@@ -321,7 +310,7 @@ int main(int argc, char* argv[])
                              focals[focals.size() / 2]) * 0.5f;
 
     t = getTickCount();
-    Mat result = composePano(full_imgs, cameras, work_scale, warped_image_scale);
+    Mat result = composePano(full_imgs, cameras, warped_image_scale);
     compositing_time = (getTickCount() - t) / getTickFrequency();
 
     total_time = (getTickCount() - app_start_time) / getTickFrequency();
