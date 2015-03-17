@@ -64,7 +64,6 @@ vector<string> img_names;
 bool try_gpu = true;
 double work_megapix = 0.6;
 double seam_megapix = 0.1;
-double compose_megapix = -1;
 float conf_thresh = 1.f;
 WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
 int expos_comp_type = ExposureCompensator::GAIN_BLOCKS;
@@ -114,9 +113,6 @@ int main(int argc, char* argv[])
 
     cout << "Files reading finished" << endl;
 
-    double compose_scale = 1;
-    bool is_compose_scale_set = false;
-
     int64 app_start_time = getTickCount();
 
     cout << "Finding features..." << endl;
@@ -125,14 +121,15 @@ int main(int argc, char* argv[])
     OrbFeaturesFinder finder;
 
     Mat img;
-    vector<ImageFeatures> features(num_images);
+    vector<ImageFeatures> features;
     vector<Mat> images(num_images);
 
     double work_scale = min(1.0, sqrt(work_megapix * 1e6 / full_img_sizes[0].area()));
     double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_img_sizes[0].area()));
     double seam_work_aspect = seam_scale / work_scale;
+    double compose_work_aspect = 1. / work_scale;
 
-    for (int i = 0; i < num_images; ++i)
+    for (size_t i = 0; i < num_images; ++i)
     {
         resize(full_imgs[i], img, Size(), work_scale, work_scale);
 
@@ -149,7 +146,7 @@ int main(int argc, char* argv[])
 
     find_features_time = (getTickCount() - t) / getTickFrequency();
 
-    cout << "Pairwise matching..."<< endl;
+    cout << "Pairwise matching..." << endl;
     t = getTickCount();
     vector<MatchesInfo> pairwise_matches;
     BestOf2NearestMatcher matcher(try_gpu, match_conf);
@@ -247,14 +244,10 @@ int main(int argc, char* argv[])
     Ptr<WarperCreator> warper_creator;
 #if defined(HAVE_OPENCV_GPU)
     if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
-    {
         warper_creator = new cv::SphericalWarperGpu();
-    }
     else
 #endif
-    {
         warper_creator = new cv::SphericalWarper();
-    }
 
     Ptr<RotationWarper> warper = warper_creator->create(
                 static_cast<float>(warped_image_scale * seam_work_aspect));
@@ -264,8 +257,7 @@ int main(int argc, char* argv[])
         Mat_<float> K;
         cameras[i].K().convertTo(K, CV_32F);
         float swa = (float)seam_work_aspect;
-        K(0,0) *= swa; K(0,2) *= swa;
-        K(1,1) *= swa; K(1,2) *= swa;
+        K(0,0) *= swa; K(0,2) *= swa; K(1,1) *= swa; K(1,2) *= swa;
 
         corners[i] = warper->warp(images[i], K, cameras[i].R, INTER_LINEAR,
                                   BORDER_REFLECT, images_warped[i]);
@@ -306,63 +298,38 @@ int main(int argc, char* argv[])
     Mat img_warped, img_warped_s;
     Mat dilated_mask, seam_mask, mask, mask_warped;
     Ptr<Blender> blender;
-    double compose_work_aspect = 1;
+
+    // Update warped image scale
+    warped_image_scale *= static_cast<float>(compose_work_aspect);
+    warper = warper_creator->create(warped_image_scale);
+
+    // Update corners and sizes
+    for (size_t i = 0; i < num_images; ++i)
+    {
+        // Update intrinsics
+        cameras[i].focal *= compose_work_aspect;
+        cameras[i].ppx *= compose_work_aspect;
+        cameras[i].ppy *= compose_work_aspect;
+
+        Mat K;
+        cameras[i].K().convertTo(K, CV_32F);
+        Rect roi = warper->warpRoi(full_img_sizes[i], K, cameras[i].R);
+        corners[i] = roi.tl();
+        sizes[i] = roi.size();
+    }
 
     for (size_t img_idx = 0; img_idx < num_images; ++img_idx)
     {
         cout << "Compositing image #" << indices[img_idx]+1 << endl;
 
-        // Read image and resize it if necessary
-        if (!is_compose_scale_set)
-        {
-            if (compose_megapix > 0)
-                compose_scale = min(1.0, sqrt(compose_megapix * 1e6 / full_img_sizes[img_idx].area()));
-            is_compose_scale_set = true;
-
-            // Compute relative scales
-            compose_work_aspect = compose_scale / work_scale;
-
-            // Update warped image scale
-            warped_image_scale *= static_cast<float>(compose_work_aspect);
-            warper = warper_creator->create(warped_image_scale);
-
-            // Update corners and sizes
-            for (size_t i = 0; i < num_images; ++i)
-            {
-                // Update intrinsics
-                cameras[i].focal *= compose_work_aspect;
-                cameras[i].ppx *= compose_work_aspect;
-                cameras[i].ppy *= compose_work_aspect;
-
-                // Update corner and size
-                Size sz = full_img_sizes[i];
-                if (std::abs(compose_scale - 1) > 1e-1)
-                {
-                    sz.width = cvRound(full_img_sizes[i].width * compose_scale);
-                    sz.height = cvRound(full_img_sizes[i].height * compose_scale);
-                }
-
-                Mat K;
-                cameras[i].K().convertTo(K, CV_32F);
-                Rect roi = warper->warpRoi(sz, K, cameras[i].R);
-                corners[i] = roi.tl();
-                sizes[i] = roi.size();
-            }
-        }
-        if (abs(compose_scale - 1) > 1e-1)
-            resize(full_imgs[img_idx], img, Size(), compose_scale, compose_scale);
-        else
-            img = full_imgs[img_idx];
-        Size img_size = img.size();
-
         Mat K;
         cameras[img_idx].K().convertTo(K, CV_32F);
 
         // Warp the current image
-        warper->warp(img, K, cameras[img_idx].R, INTER_LINEAR, BORDER_REFLECT, img_warped);
+        warper->warp(full_imgs[img_idx], K, cameras[img_idx].R, INTER_LINEAR, BORDER_REFLECT, img_warped);
 
         // Warp the current image mask
-        mask.create(img_size, CV_8U);
+        mask.create(full_imgs[img_idx].size(), CV_8U);
         mask.setTo(Scalar::all(255));
         warper->warp(mask, K, cameras[img_idx].R, INTER_NEAREST, BORDER_CONSTANT, mask_warped);
 
@@ -371,7 +338,6 @@ int main(int argc, char* argv[])
 
         img_warped.convertTo(img_warped_s, CV_16S);
         img_warped.release();
-        img.release();
         mask.release();
 
         dilate(masks_warped[img_idx], dilated_mask, Mat());
