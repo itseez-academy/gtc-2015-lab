@@ -106,16 +106,12 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, dou
     double seam_work_aspect = seam_scale / work_scale;
     double compose_work_aspect = 1. / work_scale;
 
-    Mat img_warped, img_warped_s;
-    Mat dilated_mask, seam_mask, mask, mask_warped;
-    Ptr<Blender> blender;
-
     vector<Mat> images(full_imgs.size());
+    vector<Mat> masks(full_imgs.size());
     vector<Point> corners(full_imgs.size());
     vector<Mat> masks_warped(full_imgs.size());
     vector<Mat> images_warped(full_imgs.size());
     vector<Size> sizes(full_imgs.size());
-    vector<Mat> masks(full_imgs.size());
 
     cout << "Downscaling for futher processing..." << endl;
     for (size_t i = 0; i < full_imgs.size(); ++i)
@@ -152,7 +148,6 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, dou
 
         corners[i] = warper->warp(images[i], K, cameras[i].R, INTER_LINEAR,
                                   BORDER_REFLECT, images_warped[i]);
-        sizes[i] = images_warped[i].size();
 
         warper->warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
     }
@@ -205,9 +200,17 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, dou
         sizes[i] = roi.size();
     }
 
+    Size dst_sz = resultRoi(corners, sizes).size();
+    float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
+    Ptr<Blender> blender = new MultiBandBlender(try_gpu, static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
+    blender->prepare(corners, sizes);
+
     for (size_t img_idx = 0; img_idx < full_imgs.size(); ++img_idx)
     {
         cout << "Compositing image #" << img_idx << endl;
+
+        Mat img_warped, img_warped_s;
+        Mat dilated_mask, seam_mask, mask, mask_warped;
 
         Mat K;
         cameras[img_idx].K().convertTo(K, CV_32F);
@@ -230,21 +233,6 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, dou
         dilate(masks_warped[img_idx], dilated_mask, Mat());
         resize(dilated_mask, seam_mask, mask_warped.size());
         mask_warped = seam_mask & mask_warped;
-
-        if (blender.empty())
-        {
-            blender = Blender::createDefault(blend_type, try_gpu);
-            Size dst_sz = resultRoi(corners, sizes).size();
-            float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
-            if (blend_width < 1.f)
-                blender = Blender::createDefault(Blender::NO, try_gpu);
-            else
-            {
-                MultiBandBlender* mb = dynamic_cast<MultiBandBlender*>(static_cast<Blender*>(blender));
-                mb->setNumBands(static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
-            }
-            blender->prepare(corners, sizes);
-        }
 
         // Blend the current image
         blender->feed(img_warped_s, mask_warped, corners[img_idx]);
@@ -273,11 +261,9 @@ int main(int argc, char* argv[])
     }
 
     vector<Mat> full_imgs(num_images);
-
     for (size_t i = 0; i < num_images; ++i)
     {
         full_imgs[i] = imread(img_names[i]);
-
         if (full_imgs[i].empty())
         {
             cout << "Can't open image " << img_names[i] <<endl;
@@ -285,7 +271,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    cout << "Files reading finished" << endl;
+    cout << "Images reading finished" << endl;
 
     int64 app_start_time = getTickCount();
     double work_scale = min(1.0, sqrt(work_megapix * 1e6 / full_imgs[0].size().area()));
