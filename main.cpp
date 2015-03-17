@@ -62,11 +62,8 @@ using namespace cv::detail;
 // Default command line args
 vector<string> img_names;
 bool try_gpu = true;
-double work_megapix = 0.6;
 double seam_megapix = 0.1;
 float conf_thresh = 1.f;
-WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
-int expos_comp_type = ExposureCompensator::GAIN_BLOCKS;
 float match_conf = 0.3f;
 int blend_type = Blender::MULTI_BAND;
 float blend_strength = 5;
@@ -127,16 +124,17 @@ void registerImages(const vector<ImageFeatures>& features, vector<CameraParams>&
     adjuster(features, pairwise_matches, cameras);
 }
 
-Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, float warped_image_scale)
-{
-    double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_imgs[0].size().area()));
+void findSeams(Ptr<RotationWarper> warper, Ptr<SeamFinder> seam_finder,
+               const vector<Mat>& full_imgs,
+               const vector<CameraParams>& cameras,
+               float warped_image_scale, float seam_scale,
 
+               vector<Mat> &masks_warped,
+               vector<Point> &corners)
+{
     vector<Mat> images(full_imgs.size());
-    vector<Mat> masks(full_imgs.size());
-    vector<Point> corners(full_imgs.size());
-    vector<Mat> masks_warped(full_imgs.size());
     vector<Mat> images_warped(full_imgs.size());
-    vector<Size> sizes(full_imgs.size());
+    vector<Mat> masks(full_imgs.size());
 
     cout << "Downscaling for futher processing..." << endl;
     for (size_t i = 0; i < full_imgs.size(); ++i)
@@ -153,18 +151,8 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
 
     cout << "Warping images (auxiliary)..." << endl;
     double t = getTickCount();
-    Ptr<WarperCreator> warper_creator;
-#if defined(HAVE_OPENCV_GPU)
-    if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
-        warper_creator = new cv::SphericalWarperGpu();
-    else
-#endif
-        warper_creator = new cv::SphericalWarper();
 
-    Ptr<RotationWarper> warper = warper_creator->create(
-                static_cast<float>(warped_image_scale * seam_scale));
-
-    for (size_t i = 0; i < full_imgs.size(); ++i)
+    for (size_t i = 0; i < images.size(); ++i)
     {
         Mat_<float> K;
         cameras[i].K().convertTo(K, CV_32F);
@@ -177,11 +165,34 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
         warper->warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
     }
 
-    vector<Mat> images_warped_f(full_imgs.size());
+    warping_time = (getTickCount() - t) / getTickFrequency();
+
+    // find seams
+    vector<Mat> images_warped_f(images.size());
     for (size_t i = 0; i < images_warped.size(); ++i)
         images_warped[i].convertTo(images_warped_f[i], CV_32F);
 
-    warping_time = (getTickCount() - t) / getTickFrequency();
+    seam_finder->find(images_warped_f, corners, masks_warped);
+}
+
+Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, float warped_image_scale)
+{
+    double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_imgs[0].size().area()));
+
+    vector<Point> corners(full_imgs.size());
+    vector<Mat> masks_warped(full_imgs.size());
+    vector<Size> sizes(full_imgs.size());
+
+    Ptr<WarperCreator> warper_creator;
+#if defined(HAVE_OPENCV_GPU)
+    if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
+        warper_creator = new cv::SphericalWarperGpu();
+    else
+#endif
+        warper_creator = new cv::SphericalWarper();
+
+    Ptr<RotationWarper> warper = warper_creator->create(
+        static_cast<float>(warped_image_scale * seam_scale));
 
     Ptr<SeamFinder> seam_finder;
 #if defined(HAVE_OPENCV_GPU)
@@ -191,16 +202,13 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
 #endif
         seam_finder = new detail::GraphCutSeamFinder(GraphCutSeamFinderBase::COST_COLOR);
 
-    seam_finder->find(images_warped_f, corners, masks_warped);
-
-    // Release unused memory
-    images.clear();
-    images_warped.clear();
-    images_warped_f.clear();
-    masks.clear();
+    findSeams(warper, seam_finder,
+              full_imgs, cameras,
+              warped_image_scale, seam_scale,
+              masks_warped, corners);
 
     cout << "Compositing..." << endl;
-    t = getTickCount();
+    double t = getTickCount();
 
     // Update warped image scale
     warper = warper_creator->create(warped_image_scale);
