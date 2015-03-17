@@ -75,6 +75,25 @@ string result_name = "result.jpg";
 void printUsage();
 int parseCmdArgs(int argc, char** argv);
 
+void findFeatures(const vector<Mat>& full_imgs, vector<ImageFeatures>& features, double work_scale)
+{
+    Mat img;
+    OrbFeaturesFinder finder;
+
+    features.resize(full_imgs.size());
+
+    for (size_t i = 0; i < full_imgs.size(); ++i)
+    {
+        resize(full_imgs[i], img, Size(), work_scale, work_scale);
+
+        finder(img, features[i]);
+        features[i].img_idx = i;
+        cout << "Features in image #" << i+1 << ": " << features[i].keypoints.size() << endl;
+    }
+
+    finder.collectGarbage();
+}
+
 int main(int argc, char* argv[])
 {
     float find_features_time = 0;
@@ -99,6 +118,8 @@ int main(int argc, char* argv[])
 
     vector<Mat> full_imgs(num_images);
     vector<Size> full_img_sizes(num_images);
+    vector<Mat> images(num_images);
+
     for (size_t i = 0; i < num_images; ++i)
     {
         full_imgs[i] = imread(img_names[i]);
@@ -114,37 +135,20 @@ int main(int argc, char* argv[])
     cout << "Files reading finished" << endl;
 
     int64 app_start_time = getTickCount();
-
-    cout << "Finding features..." << endl;
-    int64 t = getTickCount();
-
-    OrbFeaturesFinder finder;
-
-    Mat img;
-    vector<ImageFeatures> features;
-    vector<Mat> images(num_images);
-
     double work_scale = min(1.0, sqrt(work_megapix * 1e6 / full_img_sizes[0].area()));
     double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_img_sizes[0].area()));
     double seam_work_aspect = seam_scale / work_scale;
     double compose_work_aspect = 1. / work_scale;
 
-    for (size_t i = 0; i < num_images; ++i)
-    {
-        resize(full_imgs[i], img, Size(), work_scale, work_scale);
-
-        finder(img, features[i]);
-        features[i].img_idx = i;
-        cout << "Features in image #" << i+1 << ": " << features[i].keypoints.size() << endl;
-
-        resize(full_imgs[i], img, Size(), seam_scale, seam_scale);
-        images[i] = img.clone();
-    }
-
-    finder.collectGarbage();
-    img.release();
-
+    cout << "Finding features..." << endl;
+    vector<ImageFeatures> features;
+    int64 t = getTickCount();
+    findFeatures(full_imgs, features, work_scale);
     find_features_time = (getTickCount() - t) / getTickFrequency();
+
+    cout << "Downscaling for futher processing..." << endl;
+    for (size_t i = 0; i < num_images; ++i)
+        resize(full_imgs[i], images[i], Size(), seam_scale, seam_scale);
 
     cout << "Pairwise matching..." << endl;
     t = getTickCount();
@@ -152,7 +156,6 @@ int main(int argc, char* argv[])
     BestOf2NearestMatcher matcher(try_gpu, match_conf);
     matcher(features, pairwise_matches);
     matcher.collectGarbage();
-
     partwise_matching_time = (getTickCount() - t) / getTickFrequency();
 
     // Leave only images we are sure are from the same panorama
