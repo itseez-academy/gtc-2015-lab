@@ -81,7 +81,6 @@ int parseCmdArgs(int argc, char** argv);
 
 void findFeatures(const vector<Mat>& full_imgs, vector<ImageFeatures>& features)
 {
-    Mat img;
     OrbFeaturesFinder finder;
 
     features.resize(full_imgs.size());
@@ -136,7 +135,7 @@ void findSeams(Ptr<RotationWarper> full_warper, Ptr<RotationWarper> warper,
                Ptr<SeamFinder> seam_finder,
                const vector<Mat>& full_imgs,
                const vector<CameraParams>& cameras,
-               float warped_image_scale, float seam_scale,
+               float seam_scale,
 
                vector<Mat> &images_warped, vector<Mat> &masks_warped)
 {
@@ -231,7 +230,7 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
     findSeams(full_warper, warper,
               seam_finder,
               full_imgs, cameras,
-              warped_image_scale, seam_scale,
+              seam_scale,
               images_warped, masks_warped);
 
     cout << "Compositing..." << endl;
