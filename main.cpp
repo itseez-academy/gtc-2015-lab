@@ -72,7 +72,7 @@ string result_name = "result.jpg";
 
 float find_features_time = 0;
 float registration_time = 0;
-float warping_time = 0;
+float seam_search_time = 0;
 float compositing_time = 0;
 float total_time = 0;
 
@@ -89,7 +89,6 @@ void findFeatures(const vector<Mat>& full_imgs, vector<ImageFeatures>& features)
     {
         finder(full_imgs[i], features[i]);
         features[i].img_idx = i;
-        cout << "Features in image #" << i+1 << ": " << features[i].keypoints.size() << endl;
     }
 
     finder.collectGarbage();
@@ -160,9 +159,6 @@ void findSeams(Ptr<RotationWarper> full_warper,
     }
 
     // Warp downscaled images and their masks
-    cout << "Warping images (auxiliary)..." << endl;
-    double t = getTickCount();
-
     for (size_t i = 0; i < images.size(); ++i)
     {
         Mat_<float> K;
@@ -177,8 +173,6 @@ void findSeams(Ptr<RotationWarper> full_warper,
                                   BORDER_REFLECT, images_warped_downscaled[i]);
         warper->warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
     }
-
-    warping_time = (getTickCount() - t) / getTickFrequency();
 
     // find seams on downscaled images
     vector<Mat> images_warped_downscaled_f(images.size());
@@ -223,14 +217,18 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
     Ptr<RotationWarper> full_warper = warper_creator->create(
         static_cast<float>(warped_image_scale));
 
+    int64 t = getTickCount();
     findSeams(full_warper, warper,
               full_imgs, cameras,
               seam_scale,
-              images_warped, masks_warped);
+              images_warped,
+              masks_warped);
 
+    seam_search_time = (getTickCount() - t) / getTickFrequency();
     cout << "Compositing..." << endl;
 
     // Update corners and sizes
+    t = getTickCount();
     vector<Point> corners(full_imgs.size());
     vector<Size> sizes(full_imgs.size());
     for (size_t i = 0; i < cameras.size(); ++i)
@@ -260,6 +258,8 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
 
     Mat result, result_mask;
     blender->blend(result, result_mask);
+
+    compositing_time = (getTickCount() - t) / getTickFrequency();
 
     return result;
 }
@@ -317,9 +317,7 @@ int main(int argc, char* argv[])
         warped_image_scale = static_cast<float>(focals[focals.size() / 2 - 1] +
                              focals[focals.size() / 2]) * 0.5f;
 
-    t = getTickCount();
     Mat result = composePano(full_imgs, cameras, warped_image_scale);
-    compositing_time = (getTickCount() - t) / getTickFrequency();
 
     total_time = (getTickCount() - app_start_time) / getTickFrequency();
 
@@ -327,7 +325,7 @@ int main(int argc, char* argv[])
 
     cout << "Finding features time: " << find_features_time << " sec" << endl;
     cout << "Images registration time: " << registration_time << " sec"<< endl;
-    cout << "Warping images time: " << warping_time << " sec" << endl;
+    cout << "Seam search time: " << seam_search_time << " sec" << endl;
     cout << "Compositing time: " << compositing_time << " sec" << endl;
     cout << "Application total time: " << total_time << " sec" << endl;
 
