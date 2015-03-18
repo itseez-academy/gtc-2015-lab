@@ -71,7 +71,7 @@ float blend_strength = 5;
 string result_name = "result.jpg";
 
 float find_features_time = 0;
-float partwise_matching_time = 0;
+float registration_time = 0;
 float warping_time = 0;
 float compositing_time = 0;
 float total_time = 0;
@@ -97,15 +97,11 @@ void findFeatures(const vector<Mat>& full_imgs, vector<ImageFeatures>& features)
 
 void registerImages(const vector<ImageFeatures>& features, vector<CameraParams>& cameras)
 {
-    cout << "Pairwise matching..." << endl;
-    double t = getTickCount();
     vector<MatchesInfo> pairwise_matches;
     BestOf2NearestMatcher matcher(try_gpu, match_conf);
     matcher(features, pairwise_matches);
     matcher.collectGarbage();
-    partwise_matching_time = (getTickCount() - t) / getTickFrequency();
 
-    cout << "Image registration..." << endl;
     HomographyBasedEstimator estimator;
     estimator(features, pairwise_matches, cameras);
 
@@ -131,18 +127,26 @@ void registerImages(const vector<ImageFeatures>& features, vector<CameraParams>&
         cameras[i].R = rmats[i];
 }
 
-void findSeams(Ptr<RotationWarper> full_warper, Ptr<RotationWarper> warper,
-               Ptr<SeamFinder> seam_finder,
+void findSeams(Ptr<RotationWarper> full_warper,
+               Ptr<RotationWarper> warper,
                const vector<Mat>& full_imgs,
                const vector<CameraParams>& cameras,
                float seam_scale,
-
-               vector<Mat> &images_warped, vector<Mat> &masks_warped)
+               vector<Mat> &images_warped,
+               vector<Mat> &masks_warped)
 {
     vector<Mat> images(full_imgs.size());
     vector<Mat> images_warped_downscaled(full_imgs.size());
     vector<Mat> masks(full_imgs.size());
     vector<Point> corners(full_imgs.size());
+
+    Ptr<SeamFinder> seam_finder;
+#if defined(HAVE_OPENCV_GPU)
+    if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
+        seam_finder = new detail::GraphCutSeamFinderGpu(GraphCutSeamFinderBase::COST_COLOR);
+    else
+#endif
+        seam_finder = new detail::GraphCutSeamFinder(GraphCutSeamFinderBase::COST_COLOR);
 
     cout << "Downscaling for futher processing..." << endl;
     for (size_t i = 0; i < full_imgs.size(); ++i)
@@ -219,16 +223,7 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
     Ptr<RotationWarper> full_warper = warper_creator->create(
         static_cast<float>(warped_image_scale));
 
-    Ptr<SeamFinder> seam_finder;
-#if defined(HAVE_OPENCV_GPU)
-    if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
-        seam_finder = new detail::GraphCutSeamFinderGpu(GraphCutSeamFinderBase::COST_COLOR);
-    else
-#endif
-        seam_finder = new detail::GraphCutSeamFinder(GraphCutSeamFinderBase::COST_COLOR);
-
     findSeams(full_warper, warper,
-              seam_finder,
               full_imgs, cameras,
               seam_scale,
               images_warped, masks_warped);
@@ -296,8 +291,6 @@ int main(int argc, char* argv[])
         }
     }
 
-    cout << "Images reading finished" << endl;
-
     int64 app_start_time = getTickCount();
 
     cout << "Finding features..." << endl;
@@ -307,7 +300,9 @@ int main(int argc, char* argv[])
     find_features_time = (getTickCount() - t) / getTickFrequency();
 
     vector<CameraParams> cameras;
+    t = getTickCount();
     registerImages(features, cameras);
+    registration_time = (getTickCount() - t) / getTickFrequency();
 
     // Find median focal length
     vector<double> focals;
@@ -330,11 +325,11 @@ int main(int argc, char* argv[])
 
     imwrite(result_name, result);
 
-    cout << "Finding features, time: " << find_features_time << " sec" << endl;
-    cout << "Pairwise matching, time: " << partwise_matching_time << " sec"<< endl;
-    cout << "Warping images, time: " << warping_time << " sec" << endl;
-    cout << "Compositing, time: " << compositing_time << " sec" << endl;
-    cout << "Finished, total time: " << total_time << " sec" << endl;
+    cout << "Finding features time: " << find_features_time << " sec" << endl;
+    cout << "Images registration time: " << registration_time << " sec"<< endl;
+    cout << "Warping images time: " << warping_time << " sec" << endl;
+    cout << "Compositing time: " << compositing_time << " sec" << endl;
+    cout << "Application total time: " << total_time << " sec" << endl;
 
     return 0;
 }
