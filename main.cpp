@@ -65,6 +65,7 @@ bool try_gpu = true;
 double seam_megapix = 0.1;
 float conf_thresh = 1.f;
 float match_conf = 0.3f;
+WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
 int blend_type = Blender::MULTI_BAND;
 float blend_strength = 5;
 string result_name = "result.jpg";
@@ -122,6 +123,13 @@ void registerImages(const vector<ImageFeatures>& features, vector<CameraParams>&
     Mat refine_mask(3, 3, CV_8U, refine_mask_data);
     adjuster.setRefinementMask(refine_mask);
     adjuster(features, pairwise_matches, cameras);
+
+    vector<Mat> rmats;
+    for (size_t i = 0; i < cameras.size(); ++i)
+        rmats.push_back(cameras[i].R);
+    waveCorrect(rmats, wave_correct);
+    for (size_t i = 0; i < cameras.size(); ++i)
+        cameras[i].R = rmats[i];
 }
 
 void findSeams(Ptr<RotationWarper> full_warper, Ptr<RotationWarper> warper,
