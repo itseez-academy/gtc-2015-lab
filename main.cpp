@@ -124,17 +124,18 @@ void registerImages(const vector<ImageFeatures>& features, vector<CameraParams>&
     adjuster(features, pairwise_matches, cameras);
 }
 
-void findSeams(Ptr<RotationWarper> warper, Ptr<SeamFinder> seam_finder,
+void findSeams(Ptr<RotationWarper> full_warper, Ptr<RotationWarper> warper,
+               Ptr<SeamFinder> seam_finder,
                const vector<Mat>& full_imgs,
                const vector<CameraParams>& cameras,
                float warped_image_scale, float seam_scale,
 
-               vector<Mat> &masks_warped,
-               vector<Point> &corners)
+               vector<Mat> &images_warped, vector<Mat> &masks_warped)
 {
     vector<Mat> images(full_imgs.size());
-    vector<Mat> images_warped(full_imgs.size());
+    vector<Mat> images_warped_downscaled(full_imgs.size());
     vector<Mat> masks(full_imgs.size());
+    vector<Point> corners(full_imgs.size());
 
     cout << "Downscaling for futher processing..." << endl;
     for (size_t i = 0; i < full_imgs.size(); ++i)
@@ -147,8 +148,7 @@ void findSeams(Ptr<RotationWarper> warper, Ptr<SeamFinder> seam_finder,
         masks[i].setTo(Scalar::all(255));
     }
 
-    // Warp images and their masks
-
+    // Warp downscaled images and their masks
     cout << "Warping images (auxiliary)..." << endl;
     double t = getTickCount();
 
@@ -156,32 +156,47 @@ void findSeams(Ptr<RotationWarper> warper, Ptr<SeamFinder> seam_finder,
     {
         Mat_<float> K;
         cameras[i].K().convertTo(K, CV_32F);
-        float swa = (float)seam_scale;
-        K(0,0) *= swa; K(0,2) *= swa; K(1,1) *= swa; K(1,2) *= swa;
+
+        K(0,0) *= (float)seam_scale;
+        K(0,2) *= (float)seam_scale;
+        K(1,1) *= (float)seam_scale;
+        K(1,2) *= (float)seam_scale;
 
         corners[i] = warper->warp(images[i], K, cameras[i].R, INTER_LINEAR,
-                                  BORDER_REFLECT, images_warped[i]);
-
+                                  BORDER_REFLECT, images_warped_downscaled[i]);
         warper->warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
     }
 
     warping_time = (getTickCount() - t) / getTickFrequency();
 
-    // find seams
-    vector<Mat> images_warped_f(images.size());
+    // find seams on downscaled images
+    vector<Mat> images_warped_downscaled_f(images.size());
     for (size_t i = 0; i < images_warped.size(); ++i)
-        images_warped[i].convertTo(images_warped_f[i], CV_32F);
+        images_warped_downscaled[i].convertTo(images_warped_downscaled_f[i], CV_32F);
 
-    seam_finder->find(images_warped_f, corners, masks_warped);
+    seam_finder->find(images_warped_downscaled_f, corners, masks_warped);
+
+    // upscale to the original resolution
+    Mat dilated_mask;
+    for (size_t i = 0; i < masks_warped.size(); i++)
+    {
+        // images
+        Mat_<float> K;
+        cameras[i].K().convertTo(K, CV_32F);
+        full_warper->warp(full_imgs[i], K, cameras[i].R, INTER_LINEAR, BORDER_REFLECT, images_warped[i]);
+
+        // masks
+        dilate(masks_warped[i], dilated_mask, Mat());
+        resize(dilated_mask, masks_warped[i], images_warped[i].size());
+    }
 }
 
 Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, float warped_image_scale)
 {
     double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_imgs[0].size().area()));
 
-    vector<Point> corners(full_imgs.size());
     vector<Mat> masks_warped(full_imgs.size());
-    vector<Size> sizes(full_imgs.size());
+    vector<Mat> images_warped(full_imgs.size());
 
     Ptr<WarperCreator> warper_creator;
 #if defined(HAVE_OPENCV_GPU)
@@ -194,6 +209,9 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
     Ptr<RotationWarper> warper = warper_creator->create(
         static_cast<float>(warped_image_scale * seam_scale));
 
+    Ptr<RotationWarper> full_warper = warper_creator->create(
+        static_cast<float>(warped_image_scale));
+
     Ptr<SeamFinder> seam_finder;
 #if defined(HAVE_OPENCV_GPU)
     if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
@@ -202,23 +220,23 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
 #endif
         seam_finder = new detail::GraphCutSeamFinder(GraphCutSeamFinderBase::COST_COLOR);
 
-    findSeams(warper, seam_finder,
+    findSeams(full_warper, warper,
+              seam_finder,
               full_imgs, cameras,
               warped_image_scale, seam_scale,
-              masks_warped, corners);
+              images_warped, masks_warped);
 
     cout << "Compositing..." << endl;
     double t = getTickCount();
 
-    // Update warped image scale
-    warper = warper_creator->create(warped_image_scale);
-
     // Update corners and sizes
+    vector<Point> corners(full_imgs.size());
+    vector<Size> sizes(full_imgs.size());
     for (size_t i = 0; i < cameras.size(); ++i)
     {
         Mat K;
         cameras[i].K().convertTo(K, CV_32F);
-        Rect roi = warper->warpRoi(full_imgs[i].size(), K, cameras[i].R);
+        Rect roi = full_warper->warpRoi(full_imgs[i].size(), K, cameras[i].R);
         corners[i] = roi.tl();
         sizes[i] = roi.size();
     }
@@ -232,30 +250,11 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
     {
         cout << "Compositing image #" << img_idx << endl;
 
-        Mat img_warped, img_warped_s;
-        Mat dilated_mask, seam_mask, mask, mask_warped;
-
-        Mat K;
-        cameras[img_idx].K().convertTo(K, CV_32F);
-
-        // Warp the current image
-        warper->warp(full_imgs[img_idx], K, cameras[img_idx].R, INTER_LINEAR, BORDER_REFLECT, img_warped);
-
-        // Warp the current image mask
-        mask.create(full_imgs[img_idx].size(), CV_8U);
-        mask.setTo(Scalar::all(255));
-        warper->warp(mask, K, cameras[img_idx].R, INTER_NEAREST, BORDER_CONSTANT, mask_warped);
-
-        img_warped.convertTo(img_warped_s, CV_16S);
-        img_warped.release();
-        mask.release();
-
-        dilate(masks_warped[img_idx], dilated_mask, Mat());
-        resize(dilated_mask, seam_mask, mask_warped.size());
-        mask_warped = seam_mask & mask_warped;
+        Mat img_warped_s;
+        images_warped[img_idx].convertTo(img_warped_s, CV_16S);
 
         // Blend the current image
-        blender->feed(img_warped_s, mask_warped, corners[img_idx]);
+        blender->feed(img_warped_s, masks_warped[img_idx], corners[img_idx]);
     }
 
     Mat result, result_mask;
