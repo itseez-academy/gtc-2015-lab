@@ -59,9 +59,11 @@ using namespace std;
 using namespace cv;
 using namespace cv::detail;
 
+#define USE_GPU 0
+bool try_gpu = false;
+
 // Default command line args
 vector<string> img_names;
-bool try_gpu = true;
 double seam_megapix = 0.1;
 float conf_thresh = 1.f;
 float match_conf = 0.3f;
@@ -72,8 +74,11 @@ string result_name = "result.jpg";
 
 float find_features_time = 0;
 float registration_time = 0;
+float adjuster_time = 0;
+float matcher_time = 0;
+float blending_time = 0;
 float seam_search_time = 0;
-float compositing_time = 0;
+float composing_time = 0;
 float total_time = 0;
 
 void printUsage();
@@ -96,10 +101,12 @@ void findFeatures(const vector<Mat>& full_imgs, vector<ImageFeatures>& features)
 
 void registerImages(const vector<ImageFeatures>& features, vector<CameraParams>& cameras)
 {
+    int64 t = getTickCount();
     vector<MatchesInfo> pairwise_matches;
     BestOf2NearestMatcher matcher(try_gpu, match_conf);
     matcher(features, pairwise_matches);
     matcher.collectGarbage();
+    matcher_time = (getTickCount() - t) / getTickFrequency();
 
     HomographyBasedEstimator estimator;
     estimator(features, pairwise_matches, cameras);
@@ -111,12 +118,14 @@ void registerImages(const vector<ImageFeatures>& features, vector<CameraParams>&
         cameras[i].R = R;
     }
 
+    t = getTickCount();
     detail::BundleAdjusterRay adjuster;
     adjuster.setConfThresh(conf_thresh);
     uchar refine_mask_data[] = {1, 1, 1, 0, 1, 1, 0, 0, 0};
     Mat refine_mask(3, 3, CV_8U, refine_mask_data);
     adjuster.setRefinementMask(refine_mask);
     adjuster(features, pairwise_matches, cameras);
+    adjuster_time = (getTickCount() - t) / getTickFrequency();
 
     vector<Mat> rmats;
     for (size_t i = 0; i < cameras.size(); ++i)
@@ -140,14 +149,12 @@ void findSeams(Ptr<RotationWarper> full_warper,
     vector<Point> corners(full_imgs.size());
 
     Ptr<SeamFinder> seam_finder;
-#if defined(HAVE_OPENCV_GPU)
-    if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
+#if defined(USE_GPU)
         seam_finder = new detail::GraphCutSeamFinderGpu(GraphCutSeamFinderBase::COST_COLOR);
-    else
-#endif
+#else
         seam_finder = new detail::GraphCutSeamFinder(GraphCutSeamFinderBase::COST_COLOR);
+#endif
 
-    cout << "Downscaling for futher processing..." << endl;
     for (size_t i = 0; i < full_imgs.size(); ++i)
         resize(full_imgs[i], images[i], Size(), seam_scale, seam_scale);
 
@@ -204,12 +211,11 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
     vector<Mat> images_warped(full_imgs.size());
 
     Ptr<WarperCreator> warper_creator;
-#if defined(HAVE_OPENCV_GPU)
-    if (try_gpu && gpu::getCudaEnabledDeviceCount() > 0)
+#if defined(USE_GPU)
         warper_creator = new cv::SphericalWarperGpu();
-    else
-#endif
+#else
         warper_creator = new cv::SphericalWarper();
+#endif
 
     Ptr<RotationWarper> warper = warper_creator->create(
         static_cast<float>(warped_image_scale * seam_scale));
@@ -225,7 +231,6 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
               masks_warped);
 
     seam_search_time = (getTickCount() - t) / getTickFrequency();
-    cout << "Compositing..." << endl;
 
     // Update corners and sizes
     t = getTickCount();
@@ -247,8 +252,6 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
 
     for (size_t img_idx = 0; img_idx < full_imgs.size(); ++img_idx)
     {
-        cout << "Compositing image #" << img_idx << endl;
-
         Mat img_warped_s;
         images_warped[img_idx].convertTo(img_warped_s, CV_16S);
 
@@ -259,7 +262,7 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
     Mat result, result_mask;
     blender->blend(result, result_mask);
 
-    compositing_time = (getTickCount() - t) / getTickFrequency();
+    blending_time = (getTickCount() - t) / getTickFrequency();
 
     return result;
 }
@@ -280,6 +283,7 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+    cout << "Reading images..." << endl;
     vector<Mat> full_imgs(num_images);
     for (size_t i = 0; i < num_images; ++i)
     {
@@ -299,6 +303,7 @@ int main(int argc, char* argv[])
     findFeatures(full_imgs, features);
     find_features_time = (getTickCount() - t) / getTickFrequency();
 
+    cout << "Registering images..." << endl;
     vector<CameraParams> cameras;
     t = getTickCount();
     registerImages(features, cameras);
@@ -317,16 +322,23 @@ int main(int argc, char* argv[])
         warped_image_scale = static_cast<float>(focals[focals.size() / 2 - 1] +
                              focals[focals.size() / 2]) * 0.5f;
 
+    cout << "Composing pano..." << endl;
+    t = getTickCount();
     Mat result = composePano(full_imgs, cameras, warped_image_scale);
+    composing_time = (getTickCount() - t) / getTickFrequency();
 
     total_time = (getTickCount() - app_start_time) / getTickFrequency();
 
     imwrite(result_name, result);
 
+    cout << endl;
     cout << "Finding features time: " << find_features_time << " sec" << endl;
     cout << "Images registration time: " << registration_time << " sec"<< endl;
-    cout << "Seam search time: " << seam_search_time << " sec" << endl;
-    cout << "Compositing time: " << compositing_time << " sec" << endl;
+    cout << "   Adjuster time: " << adjuster_time << " sec" << endl;
+    cout << "   Matching time: " << matcher_time << " sec" << endl;
+    cout << "Composing time: " << composing_time << " sec" << endl;
+    cout << "   Seam search time: " << seam_search_time << " sec" << endl;
+    cout << "   Blending time: " << blending_time << " sec" << endl;
     cout << "Application total time: " << total_time << " sec" << endl;
 
     return 0;
