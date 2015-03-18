@@ -234,7 +234,6 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
               images_warped, masks_warped);
 
     cout << "Compositing..." << endl;
-    double t = getTickCount();
 
     // Update corners and sizes
     vector<Point> corners(full_imgs.size());
