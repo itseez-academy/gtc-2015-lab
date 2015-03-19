@@ -14,10 +14,7 @@
 #include "opencv2/stitching/detail/warpers.hpp"
 #include "opencv2/stitching/warpers.hpp"
 
-#define USE_GPU 1
-
-using namespace std;
-using namespace cv;
+//#define USE_GPU 1
 
 #ifdef USE_GPU
 const bool try_gpu = true;
@@ -37,25 +34,25 @@ struct Timing
     float total;
 };
 
-void findFeatures(const vector<Mat>& imgs,
-                  vector<detail::ImageFeatures>& features);
+void findFeatures(const std::vector<cv::Mat>& imgs,
+                  std::vector<cv::detail::ImageFeatures>& features);
 
-void registerImages(const vector<detail::ImageFeatures>& features,
-                    vector<detail::CameraParams>& cameras,
+void registerImages(const std::vector<cv::detail::ImageFeatures>& features,
+                    std::vector<cv::detail::CameraParams>& cameras,
                     Timing& time);
 
 #ifdef USE_GPU
-Mat composePano(const vector<gpu::GpuMat>& imgs,
-                vector<detail::CameraParams>& cameras,
+cv::Mat composePano(const std::vector<cv::gpu::GpuMat>& imgs,
+                std::vector<cv::detail::CameraParams>& cameras,
                 float warped_image_scale,
                 Timing& time);
 #else
-Mat composePano(const vector<Mat>& imgs,
-                vector<detail::CameraParams>& cameras,
+cv::Mat composePano(const std::vector<cv::Mat>& imgs,
+                std::vector<cv::detail::CameraParams>& cameras,
                 float warped_image_scale,
                 Timing& time);
 #endif
 
-float FocalLengthMedian(vector<detail::CameraParams>& cameras);
+float FocalLengthMedian(std::vector<cv::detail::CameraParams>& cameras);
 
 #endif // STITCHING_HPP

@@ -212,21 +212,20 @@ Mat composePano(const vector<gpu::GpuMat>& imgs,
                 float warped_image_scale,
                 Timing& time)
 {
-    double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / imgs[0].size().area()));
+    double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 /
+                                      imgs[0].size().area()));
 
     vector<gpu::GpuMat> masks_warped(imgs.size());
     vector<gpu::GpuMat> images_warped(imgs.size());
 
-    detail::SphericalWarperGpu warper(static_cast<float>(warped_image_scale * seam_scale));
-    detail::SphericalWarperGpu full_warper(static_cast<float>(warped_image_scale));
+    detail::SphericalWarperGpu warper_full(
+                static_cast<float>(warped_image_scale));
+    detail::SphericalWarperGpu warper_downscaled(
+                static_cast<float>(warped_image_scale * seam_scale));
 
     int64 t = getTickCount();
-    findSeams(full_warper, warper,
-              imgs, cameras,
-              seam_scale,
-              images_warped,
-              masks_warped);
-
+    findSeams(warper_full, warper_downscaled, imgs, cameras,
+              seam_scale, images_warped, masks_warped);
     time.find_seams = (getTickCount() - t) / getTickFrequency();
 
     // Update corners and sizes
@@ -237,21 +236,23 @@ Mat composePano(const vector<gpu::GpuMat>& imgs,
     {
         Mat K;
         cameras[i].K().convertTo(K, CV_32F);
-        Rect roi = full_warper.warpRoi(imgs[i].size(), K, cameras[i].R);
+        Rect roi = warper_full.warpRoi(imgs[i].size(), K, cameras[i].R);
         corners[i] = roi.tl();
         sizes[i] = roi.size();
     }
 
-    Size dst_sz = detail::resultRoi(corners, sizes).size();
-    float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
-    MultiBandBlenderGpu blender(static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
+    Size result_size = detail::resultRoi(corners, sizes).size();
+    float blend_width = sqrt(static_cast<float>(result_size.area())) *
+                             blend_strength / 100.f;
+    MultiBandBlenderGpu blender(
+                static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
     blender.prepare(detail::resultRoi(corners, sizes));
 
-    for (size_t img_idx = 0; img_idx < imgs.size(); ++img_idx)
+    gpu::GpuMat img_warped_s;
+    for (size_t i = 0; i < imgs.size(); ++i)
     {
-        gpu::GpuMat img_warped_s;
-        images_warped[img_idx].convertTo(img_warped_s, CV_16S);
-        blender.feed(img_warped_s, masks_warped[img_idx], corners[img_idx]);
+        images_warped[i].convertTo(img_warped_s, CV_16S);
+        blender.feed(img_warped_s, masks_warped[i], corners[i]);
     }
 
     Mat result, result_mask;
