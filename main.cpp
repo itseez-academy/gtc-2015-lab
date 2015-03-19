@@ -42,7 +42,9 @@
 
 #include <iostream>
 #include <fstream>
+#include "opencv2/opencv_modules.hpp"
 #include "opencv2/highgui/highgui.hpp"
+#include "opencv2/gpu/gpu.hpp"
 #include "opencv2/stitching/stitcher.hpp"
 #include "opencv2/stitching/detail/autocalib.hpp"
 #include "opencv2/stitching/detail/blenders.hpp"
@@ -57,18 +59,17 @@
 
 using namespace std;
 using namespace cv;
-using namespace cv::detail;
 
-#define USE_GPU 0
-bool try_gpu = false;
+#define USE_GPU
+bool try_gpu = true;
 
 // Default command line args
 vector<string> img_names;
 double seam_megapix = 0.1;
 float conf_thresh = 1.f;
 float match_conf = 0.3f;
-WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
-int blend_type = Blender::MULTI_BAND;
+detail::WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
+int blend_type = detail::Blender::MULTI_BAND;
 float blend_strength = 5;
 string result_name = "result.jpg";
 
@@ -84,9 +85,9 @@ float total_time = 0;
 void printUsage();
 int parseCmdArgs(int argc, char** argv);
 
-void findFeatures(const vector<Mat>& full_imgs, vector<ImageFeatures>& features)
+void findFeatures(const vector<Mat>& full_imgs, vector<detail::ImageFeatures>& features)
 {
-    OrbFeaturesFinder finder;
+    detail::OrbFeaturesFinder finder;
 
     features.resize(full_imgs.size());
 
@@ -99,16 +100,16 @@ void findFeatures(const vector<Mat>& full_imgs, vector<ImageFeatures>& features)
     finder.collectGarbage();
 }
 
-void registerImages(const vector<ImageFeatures>& features, vector<CameraParams>& cameras)
+void registerImages(const vector<detail::ImageFeatures>& features, vector<detail::CameraParams>& cameras)
 {
     int64 t = getTickCount();
-    vector<MatchesInfo> pairwise_matches;
-    BestOf2NearestMatcher matcher(try_gpu, match_conf);
+    vector<detail::MatchesInfo> pairwise_matches;
+    detail::BestOf2NearestMatcher matcher(try_gpu, match_conf);
     matcher(features, pairwise_matches);
     matcher.collectGarbage();
     matcher_time = (getTickCount() - t) / getTickFrequency();
 
-    HomographyBasedEstimator estimator;
+    detail::HomographyBasedEstimator estimator;
     estimator(features, pairwise_matches, cameras);
 
     for (size_t i = 0; i < cameras.size(); ++i)
@@ -135,10 +136,84 @@ void registerImages(const vector<ImageFeatures>& features, vector<CameraParams>&
         cameras[i].R = rmats[i];
 }
 
-void findSeams(Ptr<RotationWarper> full_warper,
-               Ptr<RotationWarper> warper,
+#ifdef USE_GPU
+void findSeams(detail::SphericalWarperGpu& full_warper,
+               detail::SphericalWarperGpu& warper,
+               const vector<gpu::GpuMat>& full_imgs,
+               const vector<detail::CameraParams>& cameras,
+               float seam_scale,
+               vector<gpu::GpuMat>& images_warped,
+               vector<gpu::GpuMat>& masks_warped)
+{
+    vector<gpu::GpuMat> images(full_imgs.size());
+    vector<gpu::GpuMat> images_warped_downscaled(full_imgs.size());
+    vector<gpu::GpuMat> masks(full_imgs.size());
+    vector<Point> corners(full_imgs.size());
+
+    detail::GraphCutSeamFinderGpu seam_finder(detail::GraphCutSeamFinderBase::COST_COLOR);
+
+    for (size_t i = 0; i < full_imgs.size(); ++i)
+        gpu::resize(full_imgs[i], images[i], Size(), seam_scale, seam_scale);
+
+    // Preapre images masks
+    for (size_t i = 0; i < full_imgs.size(); ++i)
+    {
+        masks[i].create(images[i].size(), CV_8U);
+        masks[i].setTo(Scalar::all(255));
+    }
+
+    // Warp downscaled images and their masks
+    for (size_t i = 0; i < images.size(); ++i)
+    {
+        Mat_<float> K;
+        cameras[i].K().convertTo(K, CV_32F);
+
+        K(0,0) *= (float)seam_scale;
+        K(0,2) *= (float)seam_scale;
+        K(1,1) *= (float)seam_scale;
+        K(1,2) *= (float)seam_scale;
+
+        corners[i] = warper.warp(images[i], K, cameras[i].R, INTER_LINEAR,
+                                  BORDER_REFLECT, images_warped_downscaled[i]);
+        warper.warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
+    }
+
+    // find seams on downscaled images
+    vector<Mat> images_warped_downscaled_f(images.size());
+    for (size_t i = 0; i < images_warped.size(); ++i)
+    {
+        gpu::GpuMat tmp;
+        images_warped_downscaled[i].convertTo(tmp, CV_32F);
+        tmp.download(images_warped_downscaled_f[i]);
+    }
+
+    vector<Mat> masks_warped_cpu(masks_warped.size());
+    for (size_t i = 0; i < masks_warped.size(); i++)
+    {
+        masks_warped[i].download(masks_warped_cpu[i]);
+    }
+
+    seam_finder.find(images_warped_downscaled_f, corners, masks_warped_cpu);
+
+    // upscale to the original resolution
+    gpu::GpuMat dilated_mask;
+    for (size_t i = 0; i < masks_warped.size(); i++)
+    {
+        // images
+        Mat_<float> K;
+        cameras[i].K().convertTo(K, CV_32F);
+        full_warper.warp(full_imgs[i], K, cameras[i].R, INTER_LINEAR, BORDER_REFLECT, images_warped[i]);
+
+        // masks
+        gpu::dilate(masks_warped[i], dilated_mask, Mat());
+        gpu::resize(dilated_mask, masks_warped[i], images_warped[i].size());
+    }
+}
+#else
+void findSeams(detail::SphericalWarper& full_warper,
+               detail::SphericalWarper& warper,
                const vector<Mat>& full_imgs,
-               const vector<CameraParams>& cameras,
+               const vector<detail::CameraParams>& cameras,
                float seam_scale,
                vector<Mat> &images_warped,
                vector<Mat> &masks_warped)
@@ -148,12 +223,8 @@ void findSeams(Ptr<RotationWarper> full_warper,
     vector<Mat> masks(full_imgs.size());
     vector<Point> corners(full_imgs.size());
 
-    Ptr<SeamFinder> seam_finder;
-#if defined(USE_GPU)
-        seam_finder = new detail::GraphCutSeamFinderGpu(GraphCutSeamFinderBase::COST_COLOR);
-#else
-        seam_finder = new detail::GraphCutSeamFinder(GraphCutSeamFinderBase::COST_COLOR);
-#endif
+    Ptr<detail::SeamFinder> seam_finder;
+    seam_finder = new detail::GraphCutSeamFinder(detail::GraphCutSeamFinderBase::COST_COLOR);
 
     for (size_t i = 0; i < full_imgs.size(); ++i)
         resize(full_imgs[i], images[i], Size(), seam_scale, seam_scale);
@@ -176,9 +247,9 @@ void findSeams(Ptr<RotationWarper> full_warper,
         K(1,1) *= (float)seam_scale;
         K(1,2) *= (float)seam_scale;
 
-        corners[i] = warper->warp(images[i], K, cameras[i].R, INTER_LINEAR,
+        corners[i] = warper.warp(images[i], K, cameras[i].R, INTER_LINEAR,
                                   BORDER_REFLECT, images_warped_downscaled[i]);
-        warper->warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
+        warper.warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
     }
 
     // find seams on downscaled images
@@ -195,33 +266,31 @@ void findSeams(Ptr<RotationWarper> full_warper,
         // images
         Mat_<float> K;
         cameras[i].K().convertTo(K, CV_32F);
-        full_warper->warp(full_imgs[i], K, cameras[i].R, INTER_LINEAR, BORDER_REFLECT, images_warped[i]);
+        full_warper.warp(full_imgs[i], K, cameras[i].R, INTER_LINEAR, BORDER_REFLECT, images_warped[i]);
 
         // masks
         dilate(masks_warped[i], dilated_mask, Mat());
         resize(dilated_mask, masks_warped[i], images_warped[i].size());
     }
 }
-
-Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, float warped_image_scale)
-{
-    double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_imgs[0].size().area()));
-
-    vector<Mat> masks_warped(full_imgs.size());
-    vector<Mat> images_warped(full_imgs.size());
-
-    Ptr<WarperCreator> warper_creator;
-#if defined(USE_GPU)
-        warper_creator = new cv::SphericalWarperGpu();
-#else
-        warper_creator = new cv::SphericalWarper();
 #endif
 
-    Ptr<RotationWarper> warper = warper_creator->create(
-        static_cast<float>(warped_image_scale * seam_scale));
+#ifdef USE_GPU
+Mat composePano(const vector<Mat>& full_imgs_cpu, vector<detail::CameraParams>& cameras, float warped_image_scale)
+{
+    double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_imgs_cpu[0].size().area()));
 
-    Ptr<RotationWarper> full_warper = warper_creator->create(
-        static_cast<float>(warped_image_scale));
+    vector<gpu::GpuMat> full_imgs(full_imgs_cpu.size());
+    vector<gpu::GpuMat> masks_warped(full_imgs.size());
+    vector<gpu::GpuMat> images_warped(full_imgs.size());
+
+    for (size_t i = 0; i < full_imgs_cpu.size(); i++)
+    {
+        full_imgs[i].upload(full_imgs_cpu[i]);
+    }
+
+    detail::SphericalWarperGpu warper(static_cast<float>(warped_image_scale * seam_scale));
+    detail::SphericalWarperGpu full_warper(static_cast<float>(warped_image_scale));
 
     int64 t = getTickCount();
     findSeams(full_warper, warper,
@@ -240,14 +309,73 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
     {
         Mat K;
         cameras[i].K().convertTo(K, CV_32F);
-        Rect roi = full_warper->warpRoi(full_imgs[i].size(), K, cameras[i].R);
+        Rect roi = full_warper.warpRoi(full_imgs[i].size(), K, cameras[i].R);
         corners[i] = roi.tl();
         sizes[i] = roi.size();
     }
 
-    Size dst_sz = resultRoi(corners, sizes).size();
+    Size dst_sz = detail::resultRoi(corners, sizes).size();
     float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
-    Ptr<Blender> blender = new MultiBandBlender(try_gpu, static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
+    detail::MultiBandBlender blender(try_gpu, static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
+    blender.prepare(detail::resultRoi(corners, sizes));
+
+    for (size_t img_idx = 0; img_idx < full_imgs.size(); ++img_idx)
+    {
+        gpu::GpuMat img_warped_s;
+        Mat img_warped_s_cpu;
+        Mat masks_warped_cpu;
+
+        images_warped[img_idx].convertTo(img_warped_s, CV_16S);
+
+        // Blend the current image
+        img_warped_s.download(img_warped_s_cpu);
+        masks_warped[img_idx].download(masks_warped_cpu);
+        blender.feed(img_warped_s_cpu, masks_warped_cpu, corners[img_idx]);
+    }
+
+    Mat result, result_mask;
+    blender.blend(result, result_mask);
+
+    blending_time = (getTickCount() - t) / getTickFrequency();
+
+    return result;
+}
+#else
+Mat composePano(const vector<Mat>& full_imgs, vector<detail::CameraParams>& cameras, float warped_image_scale)
+{
+    double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_imgs[0].size().area()));
+
+    vector<Mat> masks_warped(full_imgs.size());
+    vector<Mat> images_warped(full_imgs.size());
+
+    detail::SphericalWarper warper(static_cast<float>(warped_image_scale * seam_scale));
+    detail::SphericalWarper full_warper(static_cast<float>(warped_image_scale));
+
+    int64 t = getTickCount();
+    findSeams(full_warper, warper,
+              full_imgs, cameras,
+              seam_scale,
+              images_warped,
+              masks_warped);
+
+    seam_search_time = (getTickCount() - t) / getTickFrequency();
+
+    // Update corners and sizes
+    t = getTickCount();
+    vector<Point> corners(full_imgs.size());
+    vector<Size> sizes(full_imgs.size());
+    for (size_t i = 0; i < cameras.size(); ++i)
+    {
+        Mat K;
+        cameras[i].K().convertTo(K, CV_32F);
+        Rect roi = full_warper.warpRoi(full_imgs[i].size(), K, cameras[i].R);
+        corners[i] = roi.tl();
+        sizes[i] = roi.size();
+    }
+
+    Size dst_sz = detail::resultRoi(corners, sizes).size();
+    float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
+    Ptr<detail::Blender> blender = new detail::MultiBandBlender(try_gpu, static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
     blender->prepare(corners, sizes);
 
     for (size_t img_idx = 0; img_idx < full_imgs.size(); ++img_idx)
@@ -266,6 +394,7 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
 
     return result;
 }
+#endif
 
 int main(int argc, char* argv[])
 {
@@ -298,13 +427,13 @@ int main(int argc, char* argv[])
     int64 app_start_time = getTickCount();
 
     cout << "Finding features..." << endl;
-    vector<ImageFeatures> features;
+    vector<detail::ImageFeatures> features;
     int64 t = getTickCount();
     findFeatures(full_imgs, features);
     find_features_time = (getTickCount() - t) / getTickFrequency();
 
     cout << "Registering images..." << endl;
-    vector<CameraParams> cameras;
+    vector<detail::CameraParams> cameras;
     t = getTickCount();
     registerImages(features, cameras);
     registration_time = (getTickCount() - t) / getTickFrequency();
