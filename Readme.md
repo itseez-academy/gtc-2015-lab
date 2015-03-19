@@ -16,18 +16,19 @@ improve performance of seam search procedure globally.
 
 # Prerequisites
 
-1. C++ compiler
+0. Get Demo source code and input images for stitching from GitHub
 ```
-    $ sudo apt-get install g++
+    $ git clone https://github.com/opencv/stitching-gtc2015
 ```
-2. GNU make
-```
-    $ sudo apt-get install make
-```
+1. Setup development environment on your board
 
-3. OpenCV for Tegra
 ```
-    $ wget http://developer.download.nvidia.com/embedded/OpenCV/L4T_21.2/libopencv4tegra-repo_l4t-r21_2.4.10.1_armhf.deb
+    $ cd stitching-gtc2015
+    $ ./setup.sh
+```
+2. Turn of Tegra power management system to get reliable performance results.
+```
+    $ sudo ./freqScale_l4t.sh
 ```
 
 # Build & Run from command line
