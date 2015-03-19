@@ -57,11 +57,20 @@
 #include "opencv2/stitching/detail/warpers.hpp"
 #include "opencv2/stitching/warpers.hpp"
 
+#define USE_GPU 1
+
+#if USE_GPU
+#include "blender.hpp"
+#endif
+
 using namespace std;
 using namespace cv;
 
-#define USE_GPU
+#if USE_GPU
 bool try_gpu = true;
+#else
+bool try_gpu = true;
+#endif
 
 // Default command line args
 vector<string> img_names;
@@ -316,7 +325,7 @@ Mat composePano(const vector<Mat>& full_imgs_cpu, vector<detail::CameraParams>& 
 
     Size dst_sz = detail::resultRoi(corners, sizes).size();
     float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
-    detail::MultiBandBlender blender(try_gpu, static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
+    MultiBandBlenderGpu blender(static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
     blender.prepare(detail::resultRoi(corners, sizes));
 
     for (size_t img_idx = 0; img_idx < full_imgs.size(); ++img_idx)
@@ -368,14 +377,14 @@ Mat composePano(const vector<Mat>& full_imgs, vector<detail::CameraParams>& came
     {
         Mat K;
         cameras[i].K().convertTo(K, CV_32F);
-        Rect roi = full_warper.warpRoi(full_imgs[i].size(), K, cameras[i].R);
+        Rect roi = full_warper->warpRoi(full_imgs[i].size(), K, cameras[i].R);
         corners[i] = roi.tl();
         sizes[i] = roi.size();
     }
 
-    Size dst_sz = detail::resultRoi(corners, sizes).size();
+    Size dst_sz = resultRoi(corners, sizes).size();
     float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
-    Ptr<detail::Blender> blender = new detail::MultiBandBlender(try_gpu, static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
+    Ptr<Blender> blender = new MultiBandBlender(try_gpu, static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
     blender->prepare(corners, sizes);
 
     for (size_t img_idx = 0; img_idx < full_imgs.size(); ++img_idx)
@@ -414,9 +423,19 @@ int main(int argc, char* argv[])
 
     cout << "Reading images..." << endl;
     vector<Mat> full_imgs(num_images);
+#if USE_GPU
+    vector<gpu::CudaMem> full_imgs_host_mem(num_images);
+#endif
     for (size_t i = 0; i < num_images; ++i)
     {
+#if USE_GPU
+        Mat tmp = imread(img_names[i]);
+        full_imgs_host_mem[i].create(tmp.size(), tmp.type());
+        full_imgs[i] = full_imgs_host_mem[i];
+        tmp.copyTo(full_imgs[i]);
+#else
         full_imgs[i] = imread(img_names[i]);
+#endif
         if (full_imgs[i].empty())
         {
             cout << "Can't open image " << img_names[i] <<endl;
