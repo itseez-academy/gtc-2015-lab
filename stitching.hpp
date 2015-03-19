@@ -14,7 +14,7 @@
 #include "opencv2/stitching/detail/warpers.hpp"
 #include "opencv2/stitching/warpers.hpp"
 
-//#define USE_GPU 1
+#define USE_GPU 1
 
 #ifdef USE_GPU
 const bool try_gpu = true;

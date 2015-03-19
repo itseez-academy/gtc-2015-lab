@@ -217,6 +217,8 @@ Mat composePano(const vector<gpu::GpuMat>& imgs,
 
     vector<gpu::GpuMat> masks_warped(imgs.size());
     vector<gpu::GpuMat> images_warped(imgs.size());
+    vector<Point> corners(imgs.size());
+    vector<Size> sizes(imgs.size());
 
     detail::SphericalWarperGpu warper_full(
                 static_cast<float>(warped_image_scale));
@@ -230,8 +232,6 @@ Mat composePano(const vector<gpu::GpuMat>& imgs,
 
     // Update corners and sizes
     t = getTickCount();
-    vector<Point> corners(imgs.size());
-    vector<Size> sizes(imgs.size());
     for (size_t i = 0; i < cameras.size(); ++i)
     {
         Mat K;
@@ -268,53 +268,53 @@ Mat composePano(const vector<Mat>& imgs,
                 float warped_image_scale,
                 Timing& time)
 {
-    double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / imgs[0].size().area()));
+    double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 /
+                                      imgs[0].size().area()));
 
     vector<Mat> masks_warped(imgs.size());
     vector<Mat> images_warped(imgs.size());
+    vector<Point> corners(imgs.size());
+    vector<Size> sizes(imgs.size());
 
-    detail::SphericalWarper warper(static_cast<float>(warped_image_scale * seam_scale));
-    detail::SphericalWarper full_warper(static_cast<float>(warped_image_scale));
+    detail::SphericalWarper warper_full(
+                static_cast<float>(warped_image_scale));
+    detail::SphericalWarper warper_downscaled(
+                static_cast<float>(warped_image_scale * seam_scale));
 
     int64 t = getTickCount();
-    findSeams(full_warper, warper,
-              imgs, cameras,
-              seam_scale,
-              images_warped,
-              masks_warped);
+    findSeams(warper_full, warper_downscaled, imgs, cameras,
+              seam_scale, images_warped, masks_warped);
 
     time.find_seams = (getTickCount() - t) / getTickFrequency();
 
     // Update corners and sizes
     t = getTickCount();
-    vector<Point> corners(imgs.size());
-    vector<Size> sizes(imgs.size());
+    Mat K;
     for (size_t i = 0; i < cameras.size(); ++i)
     {
-        Mat K;
         cameras[i].K().convertTo(K, CV_32F);
-        Rect roi = full_warper.warpRoi(imgs[i].size(), K, cameras[i].R);
+        Rect roi = warper_full.warpRoi(imgs[i].size(), K, cameras[i].R);
         corners[i] = roi.tl();
         sizes[i] = roi.size();
     }
 
-    Size dst_sz = detail::resultRoi(corners, sizes).size();
-    float blend_width = sqrt(static_cast<float>(dst_sz.area())) * blend_strength / 100.f;
-    Ptr<detail::Blender> blender = new detail::MultiBandBlender(try_gpu, static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
-    blender->prepare(corners, sizes);
+    Size result_size = detail::resultRoi(corners, sizes).size();
+    float blend_width = sqrt(static_cast<float>(result_size.area())) *
+                        blend_strength / 100.f;
+    detail::MultiBandBlender blender(
+                static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
 
+    blender.prepare(detail::resultRoi(corners, sizes));
+
+    Mat img_warped_s;
     for (size_t img_idx = 0; img_idx < imgs.size(); ++img_idx)
     {
-        Mat img_warped_s;
         images_warped[img_idx].convertTo(img_warped_s, CV_16S);
-
-        // Blend the current image
-        blender->feed(img_warped_s, masks_warped[img_idx], corners[img_idx]);
+        blender.feed(img_warped_s, masks_warped[img_idx], corners[img_idx]);
     }
 
     Mat result, result_mask;
-    blender->blend(result, result_mask);
-
+    blender.blend(result, result_mask);
     time.blending = (getTickCount() - t) / getTickFrequency();
 
     return result;
@@ -328,6 +328,7 @@ float FocalLengthMedian(vector<detail::CameraParams>& cameras)
         focals.push_back(cameras[i].focal);
 
     sort(focals.begin(), focals.end());
+
     float median;
     if (focals.size() % 2 == 1)
         median = static_cast<float>(focals[focals.size() / 2]);
