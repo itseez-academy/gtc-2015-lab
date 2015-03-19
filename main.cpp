@@ -80,13 +80,15 @@ int main(int argc, char* argv[])
     vector<Mat> full_imgs(num_images);
 #if USE_GPU
     vector<gpu::CudaMem> full_imgs_host_mem(num_images);
+    vector<gpu::GpuMat> full_imgs_gpu(num_images);
 #endif
     for (size_t i = 0; i < num_images; ++i)
     {
 #if USE_GPU
         Mat tmp = imread(img_names[i]);
-        full_imgs_host_mem[i].create(tmp.size(), tmp.type());
+        full_imgs_host_mem[i].create(tmp.size(), tmp.type(), gpu::CudaMem::ALLOC_ZEROCOPY);
         full_imgs[i] = full_imgs_host_mem[i];
+        full_imgs_gpu[i] = full_imgs_host_mem[i];
         tmp.copyTo(full_imgs[i]);
 #else
         full_imgs[i] = imread(img_names[i]);
@@ -128,7 +130,11 @@ int main(int argc, char* argv[])
 
     cout << "Composing pano..." << endl;
     t = getTickCount();
+#ifdef USE_GPU
+    Mat result = composePano(full_imgs_gpu, cameras, warped_image_scale, time);
+#else
     Mat result = composePano(full_imgs, cameras, warped_image_scale, time);
+#endif
     time.composing_time = (getTickCount() - t) / getTickFrequency();
 
     time.total_time = (getTickCount() - app_start_time) / getTickFrequency();

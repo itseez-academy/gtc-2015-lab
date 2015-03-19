@@ -92,7 +92,7 @@ void registerImages(const vector<detail::ImageFeatures>& features,
                     vector<detail::CameraParams>& cameras,
                     Timing& time);
 #ifdef USE_GPU
-Mat composePano(const vector<Mat>& full_imgs_cpu,
+Mat composePano(const vector<gpu::GpuMat>& full_imgs,
                 vector<detail::CameraParams>& cameras,
                 float warped_image_scale,
                 Timing& time);

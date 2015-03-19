@@ -7,7 +7,7 @@ OPENCV_LIBS := $(shell pkg-config --libs opencv)
 all: stitching
 
 stitching: main.o stitching.o blender.o
-    $(CXX) $(LDFLAGS) main.o stitching.o blender.o $(OPENCV_LIBS) $(CUDA_LIBS) -o stitching
+	$(CXX) $(LDFLAGS) main.o stitching.o blender.o $(OPENCV_LIBS) $(CUDA_LIBS) -o stitching
 
 main.o: main.cpp
 	$(CXX) $(CXX_FLAGS) $(OPENCV_CFLAGS) $(CUDA_CFLAGS) -o main.o -c main.cpp
@@ -16,8 +16,8 @@ blender.o: blender.cpp
 	$(CXX) $(CXX_FLAGS) $(OPENCV_CFLAGS) $(CUDA_CFLAGS) -o blender.o -c blender.cpp
 
 stitching.o: stitching.cpp
-    $(CXX) $(CXX_FLAGS) $(OPENCV_CFLAGS) $(CUDA_CFLAGS) -o stitching.o -c stitching.cpp
+	$(CXX) $(CXX_FLAGS) $(OPENCV_CFLAGS) $(CUDA_CFLAGS) -o stitching.o -c stitching.cpp
 
 clean:
-    rm -f main.o blender.o stitching.o
+	rm -f main.o blender.o stitching.o
 	rm -f stitching

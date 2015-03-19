@@ -197,21 +197,15 @@ void findSeams(detail::SphericalWarper& full_warper,
 #endif
 
 #ifdef USE_GPU
-Mat composePano(const vector<Mat>& full_imgs_cpu,
+Mat composePano(const vector<gpu::GpuMat>& full_imgs,
                 vector<detail::CameraParams>& cameras,
                 float warped_image_scale,
                 Timing& time)
 {
-    double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_imgs_cpu[0].size().area()));
+    double seam_scale = min(1.0, sqrt(seam_megapix * 1e6 / full_imgs[0].size().area()));
 
-    vector<gpu::GpuMat> full_imgs(full_imgs_cpu.size());
     vector<gpu::GpuMat> masks_warped(full_imgs.size());
     vector<gpu::GpuMat> images_warped(full_imgs.size());
-
-    for (size_t i = 0; i < full_imgs_cpu.size(); i++)
-    {
-        full_imgs[i].upload(full_imgs_cpu[i]);
-    }
 
     MySphericalWarperGpu warper(static_cast<float>(warped_image_scale * seam_scale));
     detail::SphericalWarperGpu full_warper(static_cast<float>(warped_image_scale));
