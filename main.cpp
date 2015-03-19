@@ -55,12 +55,17 @@
 #include "opencv2/stitching/detail/warpers.hpp"
 #include "opencv2/stitching/warpers.hpp"
 
+#define USE_GPU 1
+
 using namespace std;
 using namespace cv;
 using namespace cv::detail;
 
-#define USE_GPU 0
-bool try_gpu = false;
+#if USE_GPU
+bool try_gpu = true;
+#else
+bool try_gpu = true;
+#endif
 
 // Default command line args
 vector<string> img_names;
@@ -149,14 +154,16 @@ void findSeams(Ptr<RotationWarper> full_warper,
     vector<Point> corners(full_imgs.size());
 
     Ptr<SeamFinder> seam_finder;
-#if defined(USE_GPU)
+#if USE_GPU
         seam_finder = new detail::GraphCutSeamFinderGpu(GraphCutSeamFinderBase::COST_COLOR);
 #else
         seam_finder = new detail::GraphCutSeamFinder(GraphCutSeamFinderBase::COST_COLOR);
 #endif
 
     for (size_t i = 0; i < full_imgs.size(); ++i)
+    {
         resize(full_imgs[i], images[i], Size(), seam_scale, seam_scale);
+    }
 
     // Preapre images masks
     for (size_t i = 0; i < full_imgs.size(); ++i)
@@ -184,7 +191,9 @@ void findSeams(Ptr<RotationWarper> full_warper,
     // find seams on downscaled images
     vector<Mat> images_warped_downscaled_f(images.size());
     for (size_t i = 0; i < images_warped.size(); ++i)
+    {
         images_warped_downscaled[i].convertTo(images_warped_downscaled_f[i], CV_32F);
+    }
 
     seam_finder->find(images_warped_downscaled_f, corners, masks_warped);
 
@@ -211,7 +220,7 @@ Mat composePano(const vector<Mat>& full_imgs, vector<CameraParams>& cameras, flo
     vector<Mat> images_warped(full_imgs.size());
 
     Ptr<WarperCreator> warper_creator;
-#if defined(USE_GPU)
+#if USE_GPU
         warper_creator = new cv::SphericalWarperGpu();
 #else
         warper_creator = new cv::SphericalWarper();
