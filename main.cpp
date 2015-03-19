@@ -107,13 +107,13 @@ int main(int argc, char* argv[])
     vector<detail::ImageFeatures> features;
     int64 t = getTickCount();
     findFeatures(full_imgs_cpu, features);
-    time.find_features_time = (getTickCount() - t) / getTickFrequency();
+    time.find_features = (getTickCount() - t) / getTickFrequency();
 
     cout << "Registering images..." << endl;
     vector<detail::CameraParams> cameras;
     t = getTickCount();
     registerImages(features, cameras, time);
-    time.registration_time = (getTickCount() - t) / getTickFrequency();
+    time.registration = (getTickCount() - t) / getTickFrequency();
 
     // Find median focal length
     float warped_image_scale = FocalLengthMedian(cameras);
@@ -125,21 +125,21 @@ int main(int argc, char* argv[])
 #else
     Mat result = composePano(full_imgs_cpu, cameras, warped_image_scale, time);
 #endif
-    time.composing_time = (getTickCount() - t) / getTickFrequency();
+    time.composing = (getTickCount() - t) / getTickFrequency();
 
-    time.total_time = (getTickCount() - app_start_time) / getTickFrequency();
+    time.total = (getTickCount() - app_start_time) / getTickFrequency();
 
     imwrite(result_name, result);
 
     cout << "Done!" << endl << endl;
-    cout << "Finding features time: " << time.find_features_time << " sec" << endl;
-    cout << "Images registration time: " << time.registration_time << " sec"<< endl;
-    cout << "   Adjuster time: " << time.adjuster_time << " sec" << endl;
-    cout << "   Matching time: " << time.matcher_time << " sec" << endl;
-    cout << "Composing time: " << time.composing_time << " sec" << endl;
-    cout << "   Seam search time: " << time.seam_search_time << " sec" << endl;
-    cout << "   Blending time: " << time.blending_time << " sec" << endl;
-    cout << "Application total time: " << time.total_time << " sec" << endl;
+    cout << "Finding features time: " << time.find_features << " sec" << endl;
+    cout << "Images registration time: " << time.registration << " sec"<< endl;
+    cout << "   Adjuster time: " << time.adjuster << " sec" << endl;
+    cout << "   Matching time: " << time.matcher << " sec" << endl;
+    cout << "Composing time: " << time.composing << " sec" << endl;
+    cout << "   Seam search time: " << time.find_seams << " sec" << endl;
+    cout << "   Blending time: " << time.blending << " sec" << endl;
+    cout << "Application total time: " << time.total << " sec" << endl;
 
     return 0;
 }

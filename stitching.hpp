@@ -27,27 +27,30 @@ const bool try_gpu = true;
 
 struct Timing
 {
-    float registration_time;
-    float adjuster_time;
-    float matcher_time;
-    float find_features_time;
-    float blending_time;
-    float seam_search_time;
-    float composing_time;
-    float total_time;
+    float registration;
+    float adjuster;
+    float matcher;
+    float find_features;
+    float blending;
+    float find_seams;
+    float composing;
+    float total;
 };
 
-void findFeatures(const vector<Mat>& full_imgs, vector<detail::ImageFeatures>& features);
+void findFeatures(const vector<Mat>& full_imgs,
+                  vector<detail::ImageFeatures>& features);
+
 void registerImages(const vector<detail::ImageFeatures>& features,
                     vector<detail::CameraParams>& cameras,
                     Timing& time);
+
 #ifdef USE_GPU
-Mat composePano(const vector<gpu::GpuMat>& full_imgs,
+Mat composePano(const vector<gpu::GpuMat>& imgs,
                 vector<detail::CameraParams>& cameras,
                 float warped_image_scale,
                 Timing& time);
 #else
-Mat composePano(const vector<Mat>& full_imgs,
+Mat composePano(const vector<Mat>& imgs,
                 vector<detail::CameraParams>& cameras,
                 float warped_image_scale,
                 Timing& time);
