@@ -1,18 +1,29 @@
 #include "stitching.hpp"
 
-#ifdef USE_GPU
+#ifdef USE_GPU_COMPOSITION
 #include "blender.hpp"
 #endif
+
+#include "opencv2/stitching/stitcher.hpp"
+#include "opencv2/stitching/detail/autocalib.hpp"
+#include "opencv2/stitching/detail/blenders.hpp"
+#include "opencv2/stitching/detail/exposure_compensate.hpp"
+#include "opencv2/stitching/detail/motion_estimators.hpp"
+#include "opencv2/stitching/detail/seam_finders.hpp"
+#include "opencv2/stitching/detail/util.hpp"
+#include "opencv2/stitching/detail/warpers.hpp"
+#include "opencv2/stitching/warpers.hpp"
 
 using namespace std;
 using namespace cv;
 
 double seam_megapix = 0.1;
-float conf_thresh = 1.f;
+float conf_thresh = 10.f;
 float match_conf = 0.3f;
 detail::WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
 int blend_type = detail::Blender::MULTI_BAND;
 float blend_strength = 5;
+
 
 void findFeatures(const vector<Mat>& imgs, vector<detail::ImageFeatures>& features)
 {
@@ -28,11 +39,12 @@ void findFeatures(const vector<Mat>& imgs, vector<detail::ImageFeatures>& featur
     finder.collectGarbage();
 }
 
+
 void registerImages(const vector<detail::ImageFeatures>& features,
                     vector<detail::CameraParams>& cameras, Timing& time)
 {
     vector<detail::MatchesInfo> pairwise_matches;
-    detail::BestOf2NearestMatcher matcher(try_gpu, match_conf);
+    detail::BestOf2NearestMatcher matcher(USE_GPU_MATCHING, match_conf);
     detail::BundleAdjusterRay adjuster;
     adjuster.setConfThresh(conf_thresh);
     uchar refine_mask_data[] = {1, 1, 1, 0, 1, 1, 0, 0, 0};
@@ -70,7 +82,8 @@ void registerImages(const vector<detail::ImageFeatures>& features,
         cameras[i].R = rmats[i];
 }
 
-#ifdef USE_GPU
+
+#ifdef USE_GPU_COMPOSITION
 void findSeams(detail::SphericalWarperGpu& warper_full,
                detail::SphericalWarperGpu& warper_downscaled,
                const vector<gpu::GpuMat>& imgs,
@@ -206,7 +219,8 @@ void findSeams(detail::SphericalWarper& warper_full,
 }
 #endif
 
-#ifdef USE_GPU
+
+#ifdef USE_GPU_COMPOSITION
 Mat composePano(const vector<gpu::GpuMat>& imgs,
                 vector<detail::CameraParams>& cameras,
                 float warped_image_scale,
