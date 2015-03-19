@@ -37,56 +37,6 @@ struct Timing
     float total_time;
 };
 
-class MySphericalWarperGpu: public detail::SphericalWarper
-{
-public:
-    MySphericalWarperGpu(float scale):
-    detail::SphericalWarper(scale) {}
-
-    Point warp(const gpu::GpuMat &src, const Mat &K, const Mat &R, int interp_mode, int border_mode,
-                   gpu::CudaMem &dst)
-    {
-        Rect dst_roi = buildMaps(src.size(), K, R, d_xmap_, d_ymap_);
-        dst.create(dst_roi.height + 1, dst_roi.width + 1, src.type(), gpu::CudaMem::ALLOC_ZEROCOPY);
-        gpu::GpuMat tmp = dst;
-        gpu::remap(src, tmp, d_xmap_, d_ymap_, interp_mode, border_mode);
-        return dst_roi.tl();
-    }
-
-    Point warp(const gpu::GpuMat &src, const Mat &K, const Mat &R, int interp_mode, int border_mode,
-                                   gpu::GpuMat &dst)
-    {
-        Rect dst_roi = buildMaps(src.size(), K, R, d_xmap_, d_ymap_);
-        dst.create(dst_roi.height + 1, dst_roi.width + 1, src.type());
-        gpu::remap(src, dst, d_xmap_, d_ymap_, interp_mode, border_mode);
-        return dst_roi.tl();
-    }
-
-    Rect buildMaps(Size src_size, const Mat &K, const Mat &R, gpu::GpuMat &xmap, gpu::GpuMat &ymap)
-    {
-        projector_.setCameraParams(K, R);
-
-        Point dst_tl, dst_br;
-        detectResultRoi(src_size, dst_tl, dst_br);
-
-        gpu::buildWarpSphericalMaps(src_size, Rect(dst_tl, Point(dst_br.x + 1, dst_br.y + 1)),
-                                    K, R, projector_.scale, xmap, ymap);
-
-        return Rect(dst_tl, dst_br);
-    }
-
-    Rect buildMaps(Size src_size, const Mat &K, const Mat &R, Mat &xmap, Mat &ymap)
-    {
-        Rect result = buildMaps(src_size, K, R, d_xmap_, d_ymap_);
-        d_xmap_.download(xmap);
-        d_ymap_.download(ymap);
-        return result;
-    }
-
-private:
-    gpu::GpuMat d_xmap_, d_ymap_, d_src_, d_dst_;
-};
-
 void findFeatures(const vector<Mat>& full_imgs, vector<detail::ImageFeatures>& features);
 void registerImages(const vector<detail::ImageFeatures>& features,
                     vector<detail::CameraParams>& cameras,

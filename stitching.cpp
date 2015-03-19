@@ -29,7 +29,8 @@ void findFeatures(const vector<Mat>& full_imgs, vector<detail::ImageFeatures>& f
     finder.collectGarbage();
 }
 
-void registerImages(const vector<detail::ImageFeatures>& features, vector<detail::CameraParams>& cameras, Timing& time)
+void registerImages(const vector<detail::ImageFeatures>& features,
+                    vector<detail::CameraParams>& cameras, Timing& time)
 {
     int64 t = getTickCount();
     vector<detail::MatchesInfo> pairwise_matches;
@@ -67,7 +68,7 @@ void registerImages(const vector<detail::ImageFeatures>& features, vector<detail
 
 #ifdef USE_GPU
 void findSeams(detail::SphericalWarperGpu& full_warper,
-               MySphericalWarperGpu& warper,
+               detail::SphericalWarperGpu& warper,
                const vector<gpu::GpuMat>& full_imgs,
                const vector<detail::CameraParams>& cameras,
                float seam_scale,
@@ -78,7 +79,7 @@ void findSeams(detail::SphericalWarperGpu& full_warper,
     vector<gpu::GpuMat> images_warped_downscaled(full_imgs.size());
     vector<gpu::GpuMat> masks(full_imgs.size());
     vector<Point> corners(full_imgs.size());
-    vector<gpu::CudaMem> masks_warped_cumem(full_imgs.size());
+    vector<gpu::GpuMat> masks_warped_small(full_imgs.size());
 
     detail::VoronoiSeamFinder seam_finder;
 
@@ -105,15 +106,13 @@ void findSeams(detail::SphericalWarperGpu& full_warper,
 
         corners[i] = warper.warp(images[i], K, cameras[i].R, INTER_LINEAR,
                                   BORDER_REFLECT, images_warped_downscaled[i]);
-        warper.warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped_cumem[i]);
+        warper.warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped_small[i]);
     }
 
-    vector<Mat> masks_warped_cpu(masks_warped_cumem.size());
-    vector<gpu::GpuMat> masks_warped_small(masks_warped_cumem.size());
-    for (size_t i = 0; i < masks_warped_cumem.size(); i++)
+    vector<Mat> masks_warped_cpu(full_imgs.size());
+    for (size_t i = 0; i < full_imgs.size(); i++)
     {
-        masks_warped_cpu[i] = masks_warped_cumem[i];
-        masks_warped_small[i] = masks_warped_cumem[i];
+        masks_warped_small[i].download(masks_warped_cpu[i]);
     }
 
     vector<Size> sizes_(images_warped_downscaled.size());
@@ -121,6 +120,11 @@ void findSeams(detail::SphericalWarperGpu& full_warper,
         sizes_[i] = images_warped_downscaled[i].size();
 
     seam_finder.find(sizes_, corners, masks_warped_cpu);
+
+    for (size_t i = 0; i < masks_warped_small.size(); i++)
+    {
+        masks_warped_small[i].upload(masks_warped_cpu[i]);
+    }
 
     // upscale to the original resolution
     gpu::GpuMat dilated_mask;
@@ -207,7 +211,7 @@ Mat composePano(const vector<gpu::GpuMat>& full_imgs,
     vector<gpu::GpuMat> masks_warped(full_imgs.size());
     vector<gpu::GpuMat> images_warped(full_imgs.size());
 
-    MySphericalWarperGpu warper(static_cast<float>(warped_image_scale * seam_scale));
+    detail::SphericalWarperGpu warper(static_cast<float>(warped_image_scale * seam_scale));
     detail::SphericalWarperGpu full_warper(static_cast<float>(warped_image_scale));
 
     int64 t = getTickCount();
