@@ -42,9 +42,11 @@
 
 #include <iostream>
 #include <fstream>
+#include <cuda_runtime.h>
 #include "opencv2/opencv_modules.hpp"
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/gpu/gpu.hpp"
+#include "opencv2/gpu/device/common.hpp"
 #include "opencv2/stitching/stitcher.hpp"
 #include "opencv2/stitching/detail/autocalib.hpp"
 #include "opencv2/stitching/detail/blenders.hpp"
@@ -93,6 +95,56 @@ float total_time = 0;
 
 void printUsage();
 int parseCmdArgs(int argc, char** argv);
+
+class MySphericalWarperGpu: public detail::SphericalWarper
+{
+public:
+    MySphericalWarperGpu(float scale):
+    detail::SphericalWarper(scale) {}
+
+    Point warp(const gpu::GpuMat &src, const Mat &K, const Mat &R, int interp_mode, int border_mode,
+                   gpu::CudaMem &dst)
+    {
+        Rect dst_roi = buildMaps(src.size(), K, R, d_xmap_, d_ymap_);
+        dst.create(dst_roi.height + 1, dst_roi.width + 1, src.type(), gpu::CudaMem::ALLOC_ZEROCOPY);
+        gpu::GpuMat tmp = dst;
+        gpu::remap(src, tmp, d_xmap_, d_ymap_, interp_mode, border_mode);
+        return dst_roi.tl();
+    }
+
+    Point warp(const gpu::GpuMat &src, const Mat &K, const Mat &R, int interp_mode, int border_mode,
+                                   gpu::GpuMat &dst)
+    {
+        Rect dst_roi = buildMaps(src.size(), K, R, d_xmap_, d_ymap_);
+        dst.create(dst_roi.height + 1, dst_roi.width + 1, src.type());
+        gpu::remap(src, dst, d_xmap_, d_ymap_, interp_mode, border_mode);
+        return dst_roi.tl();
+    }
+
+    Rect buildMaps(Size src_size, const Mat &K, const Mat &R, gpu::GpuMat &xmap, gpu::GpuMat &ymap)
+    {
+        projector_.setCameraParams(K, R);
+
+        Point dst_tl, dst_br;
+        detectResultRoi(src_size, dst_tl, dst_br);
+
+        gpu::buildWarpSphericalMaps(src_size, Rect(dst_tl, Point(dst_br.x + 1, dst_br.y + 1)),
+                                    K, R, projector_.scale, xmap, ymap);
+
+        return Rect(dst_tl, dst_br);
+    }
+
+    Rect buildMaps(Size src_size, const Mat &K, const Mat &R, Mat &xmap, Mat &ymap)
+    {
+        Rect result = buildMaps(src_size, K, R, d_xmap_, d_ymap_);
+        d_xmap_.download(xmap);
+        d_ymap_.download(ymap);
+        return result;
+    }
+
+private:
+    gpu::GpuMat d_xmap_, d_ymap_, d_src_, d_dst_;
+};
 
 void findFeatures(const vector<Mat>& full_imgs, vector<detail::ImageFeatures>& features)
 {
@@ -147,7 +199,7 @@ void registerImages(const vector<detail::ImageFeatures>& features, vector<detail
 
 #ifdef USE_GPU
 void findSeams(detail::SphericalWarperGpu& full_warper,
-               detail::SphericalWarperGpu& warper,
+               MySphericalWarperGpu& warper,
                const vector<gpu::GpuMat>& full_imgs,
                const vector<detail::CameraParams>& cameras,
                float seam_scale,
@@ -158,8 +210,9 @@ void findSeams(detail::SphericalWarperGpu& full_warper,
     vector<gpu::GpuMat> images_warped_downscaled(full_imgs.size());
     vector<gpu::GpuMat> masks(full_imgs.size());
     vector<Point> corners(full_imgs.size());
+    vector<gpu::CudaMem> masks_warped_cumem(full_imgs.size());
 
-    detail::GraphCutSeamFinderGpu seam_finder(detail::GraphCutSeamFinderBase::COST_COLOR);
+    detail::VoronoiSeamFinder seam_finder;
 
     for (size_t i = 0; i < full_imgs.size(); ++i)
         gpu::resize(full_imgs[i], images[i], Size(), seam_scale, seam_scale);
@@ -184,29 +237,26 @@ void findSeams(detail::SphericalWarperGpu& full_warper,
 
         corners[i] = warper.warp(images[i], K, cameras[i].R, INTER_LINEAR,
                                   BORDER_REFLECT, images_warped_downscaled[i]);
-        warper.warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
+        warper.warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped_cumem[i]);
     }
 
-    // find seams on downscaled images
-    vector<Mat> images_warped_downscaled_f(images.size());
-    for (size_t i = 0; i < images_warped.size(); ++i)
+    vector<Mat> masks_warped_cpu(masks_warped_cumem.size());
+    vector<gpu::GpuMat> masks_warped_small(masks_warped_cumem.size());
+    for (size_t i = 0; i < masks_warped_cumem.size(); i++)
     {
-        gpu::GpuMat tmp;
-        images_warped_downscaled[i].convertTo(tmp, CV_32F);
-        tmp.download(images_warped_downscaled_f[i]);
+        masks_warped_cpu[i] = masks_warped_cumem[i];
+        masks_warped_small[i] = masks_warped_cumem[i];
     }
 
-    vector<Mat> masks_warped_cpu(masks_warped.size());
-    for (size_t i = 0; i < masks_warped.size(); i++)
-    {
-        masks_warped[i].download(masks_warped_cpu[i]);
-    }
+    vector<Size> sizes_(images_warped_downscaled.size());
+    for (size_t i = 0; i < images_warped_downscaled.size(); ++i)
+        sizes_[i] = images_warped_downscaled[i].size();
 
-    seam_finder.find(images_warped_downscaled_f, corners, masks_warped_cpu);
+    seam_finder.find(sizes_, corners, masks_warped_cpu);
 
     // upscale to the original resolution
     gpu::GpuMat dilated_mask;
-    for (size_t i = 0; i < masks_warped.size(); i++)
+    for (size_t i = 0; i < masks_warped_small.size(); i++)
     {
         // images
         Mat_<float> K;
@@ -214,7 +264,7 @@ void findSeams(detail::SphericalWarperGpu& full_warper,
         full_warper.warp(full_imgs[i], K, cameras[i].R, INTER_LINEAR, BORDER_REFLECT, images_warped[i]);
 
         // masks
-        gpu::dilate(masks_warped[i], dilated_mask, Mat());
+        gpu::dilate(masks_warped_small[i], dilated_mask, Mat());
         gpu::resize(dilated_mask, masks_warped[i], images_warped[i].size());
     }
 }
@@ -232,8 +282,7 @@ void findSeams(detail::SphericalWarper& full_warper,
     vector<Mat> masks(full_imgs.size());
     vector<Point> corners(full_imgs.size());
 
-    Ptr<detail::SeamFinder> seam_finder;
-    seam_finder = new detail::GraphCutSeamFinder(detail::GraphCutSeamFinderBase::COST_COLOR);
+    Ptr<detail::SeamFinder> seam_finder = new detail::VoronoiSeamFinder();
 
     for (size_t i = 0; i < full_imgs.size(); ++i)
         resize(full_imgs[i], images[i], Size(), seam_scale, seam_scale);
@@ -261,12 +310,7 @@ void findSeams(detail::SphericalWarper& full_warper,
         warper.warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
     }
 
-    // find seams on downscaled images
-    vector<Mat> images_warped_downscaled_f(images.size());
-    for (size_t i = 0; i < images_warped.size(); ++i)
-        images_warped_downscaled[i].convertTo(images_warped_downscaled_f[i], CV_32F);
-
-    seam_finder->find(images_warped_downscaled_f, corners, masks_warped);
+    seam_finder->find(images_warped_downscaled, corners, masks_warped);
 
     // upscale to the original resolution
     Mat dilated_mask;
@@ -298,7 +342,7 @@ Mat composePano(const vector<Mat>& full_imgs_cpu, vector<detail::CameraParams>& 
         full_imgs[i].upload(full_imgs_cpu[i]);
     }
 
-    detail::SphericalWarperGpu warper(static_cast<float>(warped_image_scale * seam_scale));
+    MySphericalWarperGpu warper(static_cast<float>(warped_image_scale * seam_scale));
     detail::SphericalWarperGpu full_warper(static_cast<float>(warped_image_scale));
 
     int64 t = getTickCount();
@@ -331,15 +375,8 @@ Mat composePano(const vector<Mat>& full_imgs_cpu, vector<detail::CameraParams>& 
     for (size_t img_idx = 0; img_idx < full_imgs.size(); ++img_idx)
     {
         gpu::GpuMat img_warped_s;
-        Mat img_warped_s_cpu;
-        Mat masks_warped_cpu;
-
         images_warped[img_idx].convertTo(img_warped_s, CV_16S);
-
-        // Blend the current image
-        img_warped_s.download(img_warped_s_cpu);
-        masks_warped[img_idx].download(masks_warped_cpu);
-        blender.feed(img_warped_s_cpu, masks_warped_cpu, corners[img_idx]);
+        blender.feed(img_warped_s, masks_warped[img_idx], corners[img_idx]);
     }
 
     Mat result, result_mask;
@@ -407,6 +444,7 @@ Mat composePano(const vector<Mat>& full_imgs, vector<detail::CameraParams>& came
 
 int main(int argc, char* argv[])
 {
+    cudaSafeCall(cudaSetDeviceFlags(cudaDeviceMapHost));
     cv::setBreakOnError(true);
 
     int retval = parseCmdArgs(argc, argv);
