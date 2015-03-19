@@ -14,15 +14,14 @@ detail::WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
 int blend_type = detail::Blender::MULTI_BAND;
 float blend_strength = 5;
 
-void findFeatures(const vector<Mat>& full_imgs, vector<detail::ImageFeatures>& features)
+void findFeatures(const vector<Mat>& imgs, vector<detail::ImageFeatures>& features)
 {
     detail::OrbFeaturesFinder finder;
 
-    features.resize(full_imgs.size());
-
-    for (size_t i = 0; i < full_imgs.size(); ++i)
+    features.resize(imgs.size());
+    for (size_t i = 0; i < imgs.size(); ++i)
     {
-        finder(full_imgs[i], features[i]);
+        finder(imgs[i], features[i]);
         features[i].img_idx = i;
     }
 
@@ -32,12 +31,19 @@ void findFeatures(const vector<Mat>& full_imgs, vector<detail::ImageFeatures>& f
 void registerImages(const vector<detail::ImageFeatures>& features,
                     vector<detail::CameraParams>& cameras, Timing& time)
 {
-    int64 t = getTickCount();
     vector<detail::MatchesInfo> pairwise_matches;
     detail::BestOf2NearestMatcher matcher(try_gpu, match_conf);
+    detail::BundleAdjusterRay adjuster;
+    adjuster.setConfThresh(conf_thresh);
+    uchar refine_mask_data[] = {1, 1, 1, 0, 1, 1, 0, 0, 0};
+    Mat refine_mask(3, 3, CV_8U, refine_mask_data);
+
+    // feature matching
+    int64 t = getTickCount();
     matcher(features, pairwise_matches);
-    matcher.collectGarbage();
     time.matcher = (getTickCount() - t) / getTickFrequency();
+
+    matcher.collectGarbage();
 
     detail::HomographyBasedEstimator estimator;
     estimator(features, pairwise_matches, cameras);
@@ -49,15 +55,13 @@ void registerImages(const vector<detail::ImageFeatures>& features,
         cameras[i].R = R;
     }
 
+    // bundle adjustment
     t = getTickCount();
-    detail::BundleAdjusterRay adjuster;
-    adjuster.setConfThresh(conf_thresh);
-    uchar refine_mask_data[] = {1, 1, 1, 0, 1, 1, 0, 0, 0};
-    Mat refine_mask(3, 3, CV_8U, refine_mask_data);
     adjuster.setRefinementMask(refine_mask);
     adjuster(features, pairwise_matches, cameras);
     time.adjuster = (getTickCount() - t) / getTickFrequency();
 
+    // horizon correction
     vector<Mat> rmats;
     for (size_t i = 0; i < cameras.size(); ++i)
         rmats.push_back(cameras[i].R);
@@ -67,36 +71,36 @@ void registerImages(const vector<detail::ImageFeatures>& features,
 }
 
 #ifdef USE_GPU
-void findSeams(detail::SphericalWarperGpu& full_warper,
-               detail::SphericalWarperGpu& warper,
-               const vector<gpu::GpuMat>& full_imgs,
+void findSeams(detail::SphericalWarperGpu& warper_full,
+               detail::SphericalWarperGpu& warper_downscaled,
+               const vector<gpu::GpuMat>& imgs,
                const vector<detail::CameraParams>& cameras,
                float seam_scale,
                vector<gpu::GpuMat>& images_warped,
                vector<gpu::GpuMat>& masks_warped)
 {
-    vector<gpu::GpuMat> images(full_imgs.size());
-    vector<gpu::GpuMat> images_warped_downscaled(full_imgs.size());
-    vector<gpu::GpuMat> masks(full_imgs.size());
-    vector<Point> corners(full_imgs.size());
-    vector<gpu::GpuMat> masks_warped_small(full_imgs.size());
+    vector<gpu::GpuMat> images_downscaled(imgs.size());
+    vector<gpu::GpuMat> images_downscaled_warped(imgs.size());
+    vector<gpu::GpuMat> masks(imgs.size());
+    vector<gpu::GpuMat> masks_warped_downscaled(imgs.size());
+    vector<Point> corners(imgs.size());
 
     detail::VoronoiSeamFinder seam_finder;
 
-    for (size_t i = 0; i < full_imgs.size(); ++i)
-        gpu::resize(full_imgs[i], images[i], Size(), seam_scale, seam_scale);
+    for (size_t i = 0; i < imgs.size(); ++i)
+        gpu::resize(imgs[i], images_downscaled[i], Size(), seam_scale, seam_scale);
 
     // Preapre images masks
-    for (size_t i = 0; i < full_imgs.size(); ++i)
+    for (size_t i = 0; i < imgs.size(); ++i)
     {
-        masks[i].create(images[i].size(), CV_8U);
+        masks[i].create(images_downscaled[i].size(), CV_8U);
         masks[i].setTo(Scalar::all(255));
     }
 
     // Warp downscaled images and their masks
-    for (size_t i = 0; i < images.size(); ++i)
+    Mat_<float> K;
+    for (size_t i = 0; i < images_downscaled.size(); ++i)
     {
-        Mat_<float> K;
         cameras[i].K().convertTo(K, CV_32F);
 
         K(0,0) *= (float)seam_scale;
@@ -104,72 +108,69 @@ void findSeams(detail::SphericalWarperGpu& full_warper,
         K(1,1) *= (float)seam_scale;
         K(1,2) *= (float)seam_scale;
 
-        corners[i] = warper.warp(images[i], K, cameras[i].R, INTER_LINEAR,
-                                  BORDER_REFLECT, images_warped_downscaled[i]);
-        warper.warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped_small[i]);
+        corners[i] = warper_downscaled.warp(images_downscaled[i], K, cameras[i].R,
+                                            INTER_LINEAR, BORDER_REFLECT,
+                                            images_downscaled_warped[i]);
+        warper_downscaled.warp(masks[i], K, cameras[i].R, INTER_NEAREST,
+                               BORDER_CONSTANT, masks_warped_downscaled[i]);
     }
 
-    vector<Mat> masks_warped_cpu(full_imgs.size());
-    for (size_t i = 0; i < full_imgs.size(); i++)
-    {
-        masks_warped_small[i].download(masks_warped_cpu[i]);
-    }
+    vector<Mat> masks_warped_cpu(imgs.size());
+    for (size_t i = 0; i < imgs.size(); i++)
+        masks_warped_downscaled[i].download(masks_warped_cpu[i]);
 
-    vector<Size> sizes_(images_warped_downscaled.size());
-    for (size_t i = 0; i < images_warped_downscaled.size(); ++i)
-        sizes_[i] = images_warped_downscaled[i].size();
+    vector<Size> sizes(images_downscaled_warped.size());
+    for (size_t i = 0; i < images_downscaled_warped.size(); ++i)
+        sizes[i] = images_downscaled_warped[i].size();
 
-    seam_finder.find(sizes_, corners, masks_warped_cpu);
+    seam_finder.find(sizes, corners, masks_warped_cpu);
 
-    for (size_t i = 0; i < masks_warped_small.size(); i++)
-    {
-        masks_warped_small[i].upload(masks_warped_cpu[i]);
-    }
+    for (size_t i = 0; i < masks_warped_downscaled.size(); i++)
+        masks_warped_downscaled[i].upload(masks_warped_cpu[i]);
 
     // upscale to the original resolution
     gpu::GpuMat dilated_mask;
-    for (size_t i = 0; i < masks_warped_small.size(); i++)
+    for (size_t i = 0; i < masks_warped_downscaled.size(); i++)
     {
-        // images
-        Mat_<float> K;
+        // images - warp as is
         cameras[i].K().convertTo(K, CV_32F);
-        full_warper.warp(full_imgs[i], K, cameras[i].R, INTER_LINEAR, BORDER_REFLECT, images_warped[i]);
+        warper_full.warp(imgs[i], K, cameras[i].R, INTER_LINEAR, BORDER_REFLECT, images_warped[i]);
 
-        // masks
-        gpu::dilate(masks_warped_small[i], dilated_mask, Mat());
+        // masks - upscale after seaming
+        gpu::dilate(masks_warped_downscaled[i], dilated_mask, Mat());
         gpu::resize(dilated_mask, masks_warped[i], images_warped[i].size());
     }
 }
 #else
-void findSeams(detail::SphericalWarper& full_warper,
-               detail::SphericalWarper& warper,
-               const vector<Mat>& full_imgs,
+void findSeams(detail::SphericalWarper& warper_full,
+               detail::SphericalWarper& warper_downscaled,
+               const vector<Mat>& imgs,
                const vector<detail::CameraParams>& cameras,
                float seam_scale,
                vector<Mat> &images_warped,
                vector<Mat> &masks_warped)
 {
-    vector<Mat> images(full_imgs.size());
-    vector<Mat> images_warped_downscaled(full_imgs.size());
-    vector<Mat> masks(full_imgs.size());
-    vector<Point> corners(full_imgs.size());
+    vector<Mat> images_downscaled(imgs.size());
+    vector<Mat> images_downscaled_warped(imgs.size());
+    vector<Mat> masks(imgs.size());
+    vector<Point> corners(imgs.size());
 
-    Ptr<detail::SeamFinder> seam_finder = new detail::VoronoiSeamFinder();
+    detail::VoronoiSeamFinder seam_finder;
 
-    for (size_t i = 0; i < full_imgs.size(); ++i)
-        resize(full_imgs[i], images[i], Size(), seam_scale, seam_scale);
+    for (size_t i = 0; i < imgs.size(); ++i)
+        resize(imgs[i], images_downscaled[i], Size(), seam_scale, seam_scale);
 
     // Preapre images masks
-    for (size_t i = 0; i < full_imgs.size(); ++i)
+    for (size_t i = 0; i < imgs.size(); ++i)
     {
-        masks[i].create(images[i].size(), CV_8U);
+        masks[i].create(images_downscaled[i].size(), CV_8U);
         masks[i].setTo(Scalar::all(255));
     }
 
     // Warp downscaled images and their masks
-    for (size_t i = 0; i < images.size(); ++i)
+    Mat_<float> K;
+    for (size_t i = 0; i < images_downscaled.size(); ++i)
     {
-        Mat_<float> K;
         cameras[i].K().convertTo(K, CV_32F);
 
         K(0,0) *= (float)seam_scale;
@@ -177,23 +178,28 @@ void findSeams(detail::SphericalWarper& full_warper,
         K(1,1) *= (float)seam_scale;
         K(1,2) *= (float)seam_scale;
 
-        corners[i] = warper.warp(images[i], K, cameras[i].R, INTER_LINEAR,
-                                  BORDER_REFLECT, images_warped_downscaled[i]);
-        warper.warp(masks[i], K, cameras[i].R, INTER_NEAREST, BORDER_CONSTANT, masks_warped[i]);
+        corners[i] = warper_downscaled.warp(images_downscaled[i], K, cameras[i].R,
+                                            INTER_LINEAR, BORDER_REFLECT,
+                                            images_downscaled_warped[i]);
+        warper_downscaled.warp(masks[i], K, cameras[i].R, INTER_NEAREST,
+                               BORDER_CONSTANT, masks_warped[i]);
     }
 
-    seam_finder->find(images_warped_downscaled, corners, masks_warped);
+    vector<Size> sizes(images_downscaled_warped.size());
+    for (size_t i = 0; i < images_downscaled_warped.size(); ++i)
+        sizes[i] = images_downscaled_warped[i].size();
+
+    seam_finder.find(sizes, corners, masks_warped);
 
     // upscale to the original resolution
     Mat dilated_mask;
     for (size_t i = 0; i < masks_warped.size(); i++)
     {
-        // images
-        Mat_<float> K;
+        // images - warp as is
         cameras[i].K().convertTo(K, CV_32F);
-        full_warper.warp(full_imgs[i], K, cameras[i].R, INTER_LINEAR, BORDER_REFLECT, images_warped[i]);
+        warper_full.warp(imgs[i], K, cameras[i].R, INTER_LINEAR, BORDER_REFLECT, images_warped[i]);
 
-        // masks
+        // masks - upscale after seaming
         dilate(masks_warped[i], dilated_mask, Mat());
         resize(dilated_mask, masks_warped[i], images_warped[i].size());
     }

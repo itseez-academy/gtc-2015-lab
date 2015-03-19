@@ -37,7 +37,7 @@ struct Timing
     float total;
 };
 
-void findFeatures(const vector<Mat>& full_imgs,
+void findFeatures(const vector<Mat>& imgs,
                   vector<detail::ImageFeatures>& features);
 
 void registerImages(const vector<detail::ImageFeatures>& features,
