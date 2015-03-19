@@ -309,3 +309,20 @@ Mat composePano(const vector<Mat>& full_imgs,
     return result;
 }
 #endif
+
+float FocalLengthMedian(vector<detail::CameraParams>& cameras)
+{
+    vector<double> focals;
+    for (size_t i = 0; i < cameras.size(); ++i)
+        focals.push_back(cameras[i].focal);
+
+    sort(focals.begin(), focals.end());
+    float median;
+    if (focals.size() % 2 == 1)
+        median = static_cast<float>(focals[focals.size() / 2]);
+    else
+        median = static_cast<float>(focals[focals.size() / 2 - 1] +
+                             focals[focals.size() / 2]) * 0.5f;
+
+    return median;
+}

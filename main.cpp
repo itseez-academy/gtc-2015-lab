@@ -77,7 +77,7 @@ int main(int argc, char* argv[])
     }
 
     cout << "Reading images..." << endl;
-    vector<Mat> full_imgs(num_images);
+    vector<Mat> full_imgs_cpu(num_images);
 #if USE_GPU
     vector<gpu::CudaMem> full_imgs_host_mem(num_images);
     vector<gpu::GpuMat> full_imgs_gpu(num_images);
@@ -86,14 +86,14 @@ int main(int argc, char* argv[])
     {
 #if USE_GPU
         Mat tmp = imread(img_names[i]);
-        full_imgs_host_mem[i].create(tmp.size(), tmp.type(), gpu::CudaMem::ALLOC_ZEROCOPY);
-        full_imgs[i] = full_imgs_host_mem[i];
-        full_imgs_gpu[i] = full_imgs_host_mem[i];
-        tmp.copyTo(full_imgs[i]);
+        full_imgs_host_mem[i].create(tmp.size(), tmp.type());
+        full_imgs_cpu[i] = full_imgs_host_mem[i];
+        tmp.copyTo(full_imgs_cpu[i]);
+        full_imgs_gpu[i].upload(full_imgs_cpu[i]);
 #else
-        full_imgs[i] = imread(img_names[i]);
+        full_imgs_cpu[i] = imread(img_names[i]);
 #endif
-        if (full_imgs[i].empty())
+        if (full_imgs_cpu[i].empty())
         {
             cout << "Can't open image " << img_names[i] <<endl;
             return -1;
@@ -106,7 +106,7 @@ int main(int argc, char* argv[])
     cout << "Finding features..." << endl;
     vector<detail::ImageFeatures> features;
     int64 t = getTickCount();
-    findFeatures(full_imgs, features);
+    findFeatures(full_imgs_cpu, features);
     time.find_features_time = (getTickCount() - t) / getTickFrequency();
 
     cout << "Registering images..." << endl;
@@ -116,24 +116,14 @@ int main(int argc, char* argv[])
     time.registration_time = (getTickCount() - t) / getTickFrequency();
 
     // Find median focal length
-    vector<double> focals;
-    for (size_t i = 0; i < cameras.size(); ++i)
-        focals.push_back(cameras[i].focal);
-
-    sort(focals.begin(), focals.end());
-    float warped_image_scale;
-    if (focals.size() % 2 == 1)
-        warped_image_scale = static_cast<float>(focals[focals.size() / 2]);
-    else
-        warped_image_scale = static_cast<float>(focals[focals.size() / 2 - 1] +
-                             focals[focals.size() / 2]) * 0.5f;
+    float warped_image_scale = FocalLengthMedian(cameras);
 
     cout << "Composing pano..." << endl;
     t = getTickCount();
 #ifdef USE_GPU
     Mat result = composePano(full_imgs_gpu, cameras, warped_image_scale, time);
 #else
-    Mat result = composePano(full_imgs, cameras, warped_image_scale, time);
+    Mat result = composePano(full_imgs_cpu, cameras, warped_image_scale, time);
 #endif
     time.composing_time = (getTickCount() - t) / getTickFrequency();
 
@@ -141,7 +131,7 @@ int main(int argc, char* argv[])
 
     imwrite(result_name, result);
 
-    cout << "Done" << endl << endl;
+    cout << "Done!" << endl << endl;
     cout << "Finding features time: " << time.find_features_time << " sec" << endl;
     cout << "Images registration time: " << time.registration_time << " sec"<< endl;
     cout << "   Adjuster time: " << time.adjuster_time << " sec" << endl;

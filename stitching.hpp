@@ -103,4 +103,6 @@ Mat composePano(const vector<Mat>& full_imgs,
                 Timing& time);
 #endif
 
+float FocalLengthMedian(vector<detail::CameraParams>& cameras);
+
 #endif // STITCHING_HPP
