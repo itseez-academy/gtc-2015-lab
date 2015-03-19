@@ -78,13 +78,13 @@ int main(int argc, char* argv[])
 
     cout << "Reading images..." << endl;
     vector<Mat> full_imgs_cpu(num_images);
-#if USE_GPU
+#ifdef USE_GPU
     vector<gpu::CudaMem> full_imgs_host_mem(num_images);
     vector<gpu::GpuMat> full_imgs_gpu(num_images);
 #endif
     for (size_t i = 0; i < num_images; ++i)
     {
-#if USE_GPU
+#ifdef USE_GPU
         Mat tmp = imread(img_names[i]);
         full_imgs_host_mem[i].create(tmp.size(), tmp.type());
         full_imgs_cpu[i] = full_imgs_host_mem[i];
