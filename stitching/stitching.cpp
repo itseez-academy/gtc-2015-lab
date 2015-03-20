@@ -23,7 +23,7 @@ float match_conf = 0.3f;
 detail::WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
 int blend_type = detail::Blender::MULTI_BAND;
 float blend_strength = 5;
-
+const bool USE_GPU_MATCHING = false;
 
 void findFeatures(const vector<Mat>& imgs, vector<detail::ImageFeatures>& features)
 {

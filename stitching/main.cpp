@@ -19,6 +19,7 @@ string result_name = "result.jpg";
 
 int main(int argc, char* argv[])
 {
+
     //
     // Initialize CUDA context
     //
