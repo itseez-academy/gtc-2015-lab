@@ -2,6 +2,7 @@
 
 #include "opencv2/core/core.hpp"
 #include "opencv2/gpu/gpu.hpp"
+#include "opencv2/gpu/device/common.hpp"
 #include "opencv2/highgui/highgui.hpp"
 
 #include "stitching.hpp"
@@ -19,7 +20,7 @@ string result_name = "result.jpg";
 
 int main(int argc, char* argv[])
 {
-
+    cudaSafeCall(cudaSetDeviceFlags(cudaDeviceMapHost));
     //
     // Initialize CUDA context
     //
