@@ -315,7 +315,7 @@ Mat composePano(const vector<Mat>& imgs,
     Size result_size = detail::resultRoi(corners, sizes).size();
     float blend_width = sqrt(static_cast<float>(result_size.area())) *
                         blend_strength / 100.f;
-    detail::MultiBandBlender blender(
+    detail::MultiBandBlender blender(false,
                 static_cast<int>(ceil(log(blend_width)/log(2.)) - 1.));
 
     blender.prepare(detail::resultRoi(corners, sizes));
