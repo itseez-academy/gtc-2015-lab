@@ -18,7 +18,7 @@ using namespace std;
 using namespace cv;
 
 double seam_megapix = 0.1;
-float conf_thresh = 10.f;
+float conf_thresh = 1.f;
 float match_conf = 0.3f;
 detail::WaveCorrectKind wave_correct = detail::WAVE_CORRECT_HORIZ;
 int blend_type = detail::Blender::MULTI_BAND;
@@ -269,8 +269,8 @@ Mat composePano(const vector<gpu::GpuMat>& imgs,
         blender.feed(img_warped_s, masks_warped[i], corners[i]);
     }
 
-    Mat result, result_mask;
-    blender.blend(result, result_mask);
+    Mat result;
+    blender.blend(result);
 
     time.blending = (getTickCount() - t) / getTickFrequency();
 

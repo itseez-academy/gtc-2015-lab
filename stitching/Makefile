@@ -1,6 +1,9 @@
 CUDA_CFLAGS := $(shell pkg-config --cflags cudart-6.5 cublas-6.5 cufft-6.5 nppc-6.5 nppi-6.5 npps-6.5)
 CUDA_LIBS := $(shell pkg-config --libs cudart-6.5 cublas-6.5 cufft-6.5 nppc-6.5 nppi-6.5 npps-6.5)
 
+CUDA_LIB_PATH := $(subst -L,,$(shell pkg-config --libs-only-L cudart-6.5))
+CUDA_LIBS += -Wl,-rpath=$(CUDA_LIB_PATH)
+
 OPENCV_CFLAGS := $(shell pkg-config --cflags opencv)
 OPENCV_LIBS := $(shell pkg-config --libs opencv)
 
