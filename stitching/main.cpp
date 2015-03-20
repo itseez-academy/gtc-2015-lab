@@ -1,6 +1,5 @@
 #include <iostream>
 
-#include <cuda_runtime.h>
 #include "opencv2/core/core.hpp"
 #include "opencv2/gpu/gpu.hpp"
 #include "opencv2/highgui/highgui.hpp"
@@ -46,16 +45,11 @@ int main(int argc, char* argv[])
         full_imgs_cpu[i] = imread(img_names[i]);
     }
 #else
-    vector<gpu::CudaMem> full_imgs_host_mem(num_images);
     vector<gpu::GpuMat> full_imgs_gpu(num_images);
 
     for (size_t i = 0; i < num_images; ++i)
     {
-        Mat tmp = imread(img_names[i]);
-
-        full_imgs_host_mem[i].create(tmp.size(), tmp.type());
-        full_imgs_cpu[i] = full_imgs_host_mem[i];
-        tmp.copyTo(full_imgs_cpu[i]);
+        full_imgs_cpu[i] = imread(img_names[i]);
         full_imgs_gpu[i].upload(full_imgs_cpu[i]);
     }
 #endif
