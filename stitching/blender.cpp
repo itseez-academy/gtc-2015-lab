@@ -151,7 +151,7 @@ void MultiBandBlenderGpu::restoreImageFromLaplacePyrGpu(vector<gpu::GpuMat> &d_p
     }
 }
 
-void MultiBandBlenderGpu::blend(gpu::GpuMat &d_dst, gpu::GpuMat &d_dst_mask)
+void MultiBandBlenderGpu::blend(gpu::GpuMat &d_dst)
 {
     for (int i = 0; i <= num_bands_; ++i)
     {
@@ -163,16 +163,15 @@ void MultiBandBlenderGpu::blend(gpu::GpuMat &d_dst, gpu::GpuMat &d_dst_mask)
     restoreImageFromLaplacePyrGpu(d_dst_pyr_laplace_);
 
     gpu::GpuMat d_dst_band_weights_roi = d_dst_band_weights_[0](Range(0, dst_roi_final_.height), Range(0, dst_roi_final_.width));
-    gpu::compare(d_dst_band_weights_roi, WEIGHT_EPS, d_dst_mask, cv::CMP_GT, stream_);
-    gpu::GpuMat d_dst_mask_inv;
-    gpu::bitwise_not(d_dst_mask, d_dst_mask_inv, gpu::GpuMat(), stream_);
+    gpu::GpuMat d_dst_empty_mask;
+    gpu::compare(d_dst_band_weights_roi, WEIGHT_EPS, d_dst_empty_mask, cv::CMP_LE, stream_);
 
     gpu::GpuMat d_dst_pyr_laplace_roi = d_dst_pyr_laplace_[0](Range(0, dst_roi_final_.height), Range(0, dst_roi_final_.width));
     d_dst.create(d_dst_pyr_laplace_roi.size(), CV_16SC3);
     gpu::GpuMat d_dst_pyr_laplace_roi_16u(d_dst_pyr_laplace_roi.size(), CV_16UC4, d_dst_pyr_laplace_roi.data, d_dst_pyr_laplace_roi.step);
     gpu::GpuMat d_dst_16u(d_dst.size(), CV_16UC3, d_dst.data, d_dst.step);
     gpu::cvtColor(d_dst_pyr_laplace_roi_16u, d_dst_16u, cv::COLOR_BGRA2BGR, 0, stream_);
-    stream_.enqueueMemSet(d_dst, Scalar::all(0), d_dst_mask_inv);
+    stream_.enqueueMemSet(d_dst, Scalar::all(0), d_dst_empty_mask);
 
     stream_.waitForCompletion();
 }

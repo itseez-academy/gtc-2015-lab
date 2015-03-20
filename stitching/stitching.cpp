@@ -269,8 +269,8 @@ Mat composePano(const vector<gpu::GpuMat>& imgs,
         blender.feed(img_warped_s, masks_warped[i], corners[i]);
     }
 
-    Mat result, result_mask;
-    blender.blend(result, result_mask);
+    Mat result;
+    blender.blend(result);
 
     time.blending = (getTickCount() - t) / getTickFrequency();
 

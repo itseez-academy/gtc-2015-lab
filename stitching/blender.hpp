@@ -26,17 +26,16 @@ public:
         feed(gpu::GpuMat(h_img), gpu::GpuMat(h_mask), tl);
     }
 
-    void blend(Mat &h_dst, Mat &h_dst_mask)
+    void blend(Mat &h_dst)
     {
-        gpu::GpuMat d_dst, d_dst_mask;
-        blend(d_dst, d_dst_mask);
+        gpu::GpuMat d_dst;
+        blend(d_dst);
         d_dst.download(h_dst);
-        d_dst_mask.download(h_dst_mask);
     }
 
     void feed(const gpu::GpuMat &d_img, const gpu::GpuMat &d_mask, Point tl);
 
-    void blend(gpu::GpuMat &d_dst, gpu::GpuMat &d_dst_mask);
+    void blend(gpu::GpuMat &d_dst);
 
 private:
     void createLaplacePyrGpu(const gpu::GpuMat &d_img, int num_levels, vector<gpu::GpuMat> &d_pyr);
