@@ -6,6 +6,8 @@
 
 #include "stitching.hpp"
 
+#include <cuda_runtime.h>
+
 using namespace std;
 using namespace cv;
 
@@ -17,6 +19,11 @@ string result_name = "result.jpg";
 
 int main(int argc, char* argv[])
 {
+    //
+    // Initialize CUDA context
+    //
+    cudaFree(NULL);
+
     //
     // Parse command line options
     //
