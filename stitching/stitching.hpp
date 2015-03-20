@@ -8,8 +8,8 @@
 //
 // Use these parameters to configure pipeline
 //
-const bool USE_GPU_MATCHING = true;
-#define USE_GPU_COMPOSITION
+const bool USE_GPU_MATCHING = false;
+//#define USE_GPU_COMPOSITION
 
 struct Timing
 {
